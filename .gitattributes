@@ -1,0 +1,11 @@
+# LF in the repo on every platform. The format check runs on Linux and would
+# otherwise flag every line of a file committed from Windows with CRLF.
+* text=auto eol=lf
+
+*.bat  text eol=crlf
+*.ps1  text eol=crlf
+
+# Market data is never committed (see .gitignore)
+*.dbn      binary
+*.dbn.zst  binary
+*.zst      binary

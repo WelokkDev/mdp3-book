@@ -1,0 +1,58 @@
+# Market data — never committed.
+*.dbn
+*.dbn.zst
+*.zst
+
+# Databento batch job directories (GLBX-YYYYMMDD-XXXXXXXXXX/)
+GLBX-*/
+data/
+lake/
+
+# Batch sidecars — small, but they describe a specific licensed purchase
+condition.json
+manifest.json
+metadata.json
+
+# Build
+build/
+out/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
+*.pdb
+*.ilk
+
+# pybind11 extension output
+*.pyd
+*.egg-info/
+dist/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Reports
+reports/
+*.perf
+perf.data*
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini

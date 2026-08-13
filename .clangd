@@ -1,0 +1,7 @@
+# clangd looks for compile_commands.json in the source dir
+# and in ./build — but the presets put it under build/<preset>/, so point at it.
+CompileFlags:
+  CompilationDatabase: build/debug
+
+Diagnostics:
+  UnusedIncludes: Strict
