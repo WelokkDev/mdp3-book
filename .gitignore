@@ -45,8 +45,14 @@ venv/
 .ruff_cache/
 .mypy_cache/
 
+# Private working documents — the spec names engine internals from another
+# repo, and this one is public.
+spec.md
+.claude/
+
 # Reports
 reports/
+reviews/
 *.perf
 perf.data*
 
