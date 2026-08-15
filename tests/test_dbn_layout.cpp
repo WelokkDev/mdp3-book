@@ -46,11 +46,11 @@ TEST(DbnLayout, FieldsDecodeFromRawBytesAtTheDocumentedOffsets) {
   MboMsg rec{};
   std::memcpy(&rec, raw.data(), sizeof(rec));
 
-  EXPECT_EQ(rec.length, kMboLengthUnits);
-  EXPECT_EQ(rec.rtype, kRTypeMbo);
-  EXPECT_EQ(rec.publisher_id, std::uint16_t{1});
-  EXPECT_EQ(rec.instrument_id, std::uint32_t{42004177});
-  EXPECT_EQ(rec.ts_event, 1785672006253206641ULL);
+  EXPECT_EQ(rec.hd.length, kMboLengthUnits);
+  EXPECT_EQ(rec.hd.rtype, kRTypeMbo);
+  EXPECT_EQ(rec.hd.publisher_id, std::uint16_t{1});
+  EXPECT_EQ(rec.hd.instrument_id, std::uint32_t{42004177});
+  EXPECT_EQ(rec.hd.ts_event, 1785672006253206641ULL);
   EXPECT_EQ(rec.order_id, 987654321ULL);
   EXPECT_EQ(rec.price, 29000LL * kPriceScale);
   EXPECT_EQ(rec.size, std::uint32_t{17});
@@ -72,10 +72,10 @@ TEST(DbnLayout, FieldsDecodeFromRawBytesAtTheDocumentedOffsets) {
 // Record #1 of glbx-mdp3-20260805.mbo.dbn.zst, field for field.
 TEST(DbnLayout, RealSnapshotClearRecordIsAcceptedNotValidatedAsAQuantity) {
   MboMsg rec{};
-  rec.length = kMboLengthUnits;
-  rec.rtype = kRTypeMbo;
-  rec.instrument_id = 261401;
-  rec.ts_event = 1785672006253206641ULL;
+  rec.hd.length = kMboLengthUnits;
+  rec.hd.rtype = kRTypeMbo;
+  rec.hd.instrument_id = 261401;
+  rec.hd.ts_event = 1785672006253206641ULL;
   rec.order_id = 0;
   rec.price = kUndefPrice;
   rec.size = 0;
@@ -98,7 +98,7 @@ TEST(DbnLayout, RealSnapshotClearRecordIsAcceptedNotValidatedAsAQuantity) {
   EXPECT_FALSE(has_flag(rec, kFlagMaybeBadBook));
 
   // The snapshot replays orders with their original entry time.
-  EXPECT_LT(rec.ts_event, rec.ts_recv);
+  EXPECT_LT(rec.hd.ts_event, rec.ts_recv);
 }
 
 TEST(DbnLayout, UndefPriceWouldReadAsTheBestPossibleAskIfUnguarded) {

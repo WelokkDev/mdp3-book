@@ -62,3 +62,10 @@ perf.data*
 *.swp
 Thumbs.db
 desktop.ini
+
+# The one exception to the rules above: tests/data holds Databento's own
+# Apache-2.0 DBN test vectors, not market data. The directory has to be
+# re-included before its contents, because git will not descend into an
+# excluded directory to find a negation.
+!tests/data/
+!tests/data/**

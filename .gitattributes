@@ -5,7 +5,8 @@
 *.bat  text eol=crlf
 *.ps1  text eol=crlf
 
-# Market data is never committed (see .gitignore)
+# The only DBN files here are the decoder fixtures in tests/data. Marking them
+# binary keeps eol=lf above from rewriting bytes the tests compare exactly.
 *.dbn      binary
 *.dbn.zst  binary
 *.zst      binary

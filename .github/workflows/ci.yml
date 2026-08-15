@@ -80,6 +80,72 @@ jobs:
           ASAN_OPTIONS: detect_leaks=1
         run: ctest --test-dir build --output-on-failure
 
+  # First differential oracle: Databento's reference decoder, via its Python
+  # bindings, field by field over every v3 fixture.
+  oracle-python:
+    name: oracle (databento-dbn)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: lukka/get-cmake@latest
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Pinned to the same release the fixtures in tests/data came from.
+      - run: pip install "databento-dbn==0.66.0" zstandard
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+
+      - name: Build
+        run: cmake --build build --target dbn_dump
+
+      - name: Diff every v3 fixture against the oracle
+        run: >
+          python tools/oracle_diff.py --dump build/tools/dbn_dump
+          tests/data/*.v3.dbn.zst tests/data/test_data.mbo.v3.dbn
+
+  # Second differential oracle: databento-cpp, an independent C++
+  # implementation, compared byte for byte rather than field by field.
+  oracle-cpp:
+    name: oracle (databento-cpp)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: lukka/get-cmake@latest
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev libzstd-dev
+
+      # Pinned. An oracle that drifts is not an oracle.
+      - name: Build and install databento-cpp
+        run: |
+          git clone --depth 1 --branch v0.64.0 https://github.com/databento/databento-cpp.git ${{ runner.temp }}/databento-cpp
+          cmake -S ${{ runner.temp }}/databento-cpp -B ${{ runner.temp }}/databento-cpp/build \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DDATABENTO_ENABLE_UNIT_TESTING=OFF \
+            -DDATABENTO_ENABLE_EXAMPLES=OFF
+          cmake --build ${{ runner.temp }}/databento-cpp/build --target databento --parallel
+          sudo cmake --install ${{ runner.temp }}/databento-cpp/build
+
+      # Both sides must link the same zstd, or one binary carries two copies.
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DBOOKREPLAY_BUILD_ORACLE=ON
+          -DBOOKREPLAY_USE_SYSTEM_ZSTD=ON
+
+      - name: Build
+        run: cmake --build build --target oracle_diff
+
+      - name: Diff every v3 fixture against the oracle
+        run: >
+          ./build/tests/oracle/oracle_diff
+          tests/data/*.v3.dbn.zst tests/data/test_data.mbo.v3.dbn
+
   format:
     name: clang-format
     runs-on: ubuntu-latest

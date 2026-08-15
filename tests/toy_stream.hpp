@@ -32,7 +32,7 @@ class StreamBuilder {
   StreamBuilder& clear() {
     MboMsg& r = push('R', Side::kNone, 0, kUndefPrice, 0);
     r.flags = kFlagSnapshot | kFlagBadTsRecv;
-    r.ts_event = base_ts_ - 216'000'000'000'000;
+    r.hd.ts_event = base_ts_ - 216'000'000'000'000;
     return *this;
   }
 
@@ -101,11 +101,11 @@ class StreamBuilder {
   MboMsg& push(char action, Side side, std::uint64_t order_id, std::int64_t price,
                std::uint32_t size) {
     MboMsg r{};
-    r.length = kMboLengthUnits;
-    r.rtype = kRTypeMbo;
-    r.publisher_id = 1;
-    r.instrument_id = instrument_id_;
-    r.ts_event = base_ts_ + seq_ * 1'000'000;
+    r.hd.length = kMboLengthUnits;
+    r.hd.rtype = kRTypeMbo;
+    r.hd.publisher_id = 1;
+    r.hd.instrument_id = instrument_id_;
+    r.hd.ts_event = base_ts_ + seq_ * 1'000'000;
     r.order_id = order_id;
     r.price = price;
     r.size = size;
@@ -113,7 +113,7 @@ class StreamBuilder {
     r.channel_id = 0;
     r.action = action;
     r.side = static_cast<char>(side);
-    r.ts_recv = r.ts_event + 500;
+    r.ts_recv = r.hd.ts_event + 500;
     r.ts_in_delta = 250;
     r.sequence = seq_;
     ++seq_;

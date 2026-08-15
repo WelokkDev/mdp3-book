@@ -43,24 +43,22 @@ class ToyBookBase {
     return it->second.begin()->first;
   }
 
-  [[nodiscard]] std::size_t order_count() const noexcept { return orders_.size(); }
-
  protected:
   using Levels = std::map<std::int64_t, std::uint64_t>;
 
   void insert_order(const MboMsg& rec) {
-    const Key key{rec.instrument_id, rec.order_id};
+    const Key key{rec.hd.instrument_id, rec.order_id};
     const Side side = side_of(rec);
     orders_[key] = Order{side, rec.price, rec.size};
-    level_for(side, rec.instrument_id)[rec.price] += rec.size;
+    level_for(side, rec.hd.instrument_id)[rec.price] += rec.size;
   }
 
   void erase_order(const MboMsg& rec) {
-    const auto it = orders_.find(Key{rec.instrument_id, rec.order_id});
+    const auto it = orders_.find(Key{rec.hd.instrument_id, rec.order_id});
     if (it == orders_.end()) {
-      return;  // unknown order; the record still counts as one mutation
+      return;
     }
-    remove_size(it->second.side, rec.instrument_id, it->second.price, it->second.size);
+    remove_size(it->second.side, rec.hd.instrument_id, it->second.price, it->second.size);
     orders_.erase(it);
   }
 
@@ -116,12 +114,12 @@ class ToyBook : public ToyBookBase {
         return;
       case Action::kClear:
         bump();
-        clear_instrument(rec.instrument_id);
+        clear_instrument(rec.hd.instrument_id);
         return;
       case Action::kTrade:
       case Action::kFill:
       case Action::kNone:
-        return;  // read-only, by design and against every instinct
+        return;
     }
   }
 };
@@ -145,13 +143,76 @@ class FillAsDeltaBook : public ToyBookBase {
         return;
       case Action::kClear:
         bump();
-        clear_instrument(rec.instrument_id);
+        clear_instrument(rec.hd.instrument_id);
         return;
       case Action::kFill:
         bump();
-        insert_order(rec);  // <-- the bug
+        insert_order(rec);
         return;
       case Action::kTrade:
+      case Action::kNone:
+        return;
+    }
+  }
+};
+
+class FillAsDeleteBook : public ToyBookBase {
+ public:
+  void apply(const MboMsg& rec) {
+    switch (action_of(rec)) {
+      case Action::kAdd:
+        bump();
+        insert_order(rec);
+        return;
+      case Action::kCancel:
+        bump();
+        erase_order(rec);
+        return;
+      case Action::kModify:
+        bump();
+        erase_order(rec);
+        insert_order(rec);
+        return;
+      case Action::kClear:
+        bump();
+        clear_instrument(rec.hd.instrument_id);
+        return;
+      case Action::kFill:
+        erase_order(rec);
+        return;
+      case Action::kTrade:
+      case Action::kNone:
+        return;
+    }
+  }
+};
+
+class CompensatingCountBook : public ToyBookBase {
+ public:
+  void apply(const MboMsg& rec) {
+    switch (action_of(rec)) {
+      case Action::kAdd:
+        bump();
+        insert_order(rec);
+        return;
+      case Action::kCancel:
+        if (contains(rec.hd.instrument_id, rec.order_id)) {
+          bump();
+        }
+        erase_order(rec);
+        return;
+      case Action::kModify:
+        bump();
+        erase_order(rec);
+        bump();
+        insert_order(rec);
+        return;
+      case Action::kClear:
+        bump();
+        clear_instrument(rec.hd.instrument_id);
+        return;
+      case Action::kTrade:
+      case Action::kFill:
       case Action::kNone:
         return;
     }
@@ -177,7 +238,7 @@ class TradeMutatesBook : public ToyBookBase {
         return;
       case Action::kClear:
         bump();
-        clear_instrument(rec.instrument_id);
+        clear_instrument(rec.hd.instrument_id);
         return;
       case Action::kTrade:
         bump();

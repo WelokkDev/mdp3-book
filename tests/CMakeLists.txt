@@ -13,11 +13,18 @@ FetchContent_MakeAvailable(googletest)
 
 add_executable(bookreplay_tests
   test_dbn_layout.cpp
+  test_dbn_reader.cpp
+  test_dbn_roundtrip.cpp
   test_invariants.cpp
 )
 
 target_include_directories(bookreplay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(bookreplay_tests PRIVATE bookreplay::bookreplay GTest::gtest_main)
+# The encoder compresses, so the tests link zstd directly rather than through
+# the library, which only ever decompresses.
+target_link_libraries(bookreplay_tests PRIVATE bookreplay::bookreplay bookreplay::zstd GTest::gtest_main)
+target_compile_definitions(bookreplay_tests PRIVATE
+  BOOKREPLAY_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
+)
 bookreplay_set_warnings(bookreplay_tests)
 
 include(GoogleTest)

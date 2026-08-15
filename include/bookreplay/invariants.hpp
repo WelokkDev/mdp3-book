@@ -1,7 +1,3 @@
-// Invariants come first, and they are checked against deliberately
-// broken books (tests/toy_book.hpp) to prove they FIRE. An invariant that has
-// never failed is not evidence of anything.
-
 #ifndef BOOKREPLAY_INVARIANTS_HPP
 #define BOOKREPLAY_INVARIANTS_HPP
 
@@ -23,17 +19,8 @@ enum class SessionState : std::uint8_t {
   kClosed,
 };
 
-/// What a book must expose to be checkable. The concept is what lets the
-/// invariants exist before the real Book does.
-///
-/// `mutation_count()` counts RECORDS the book treated as book-mutating — one
-/// per applied record, not one per order touched, so a Clear counts once.
-/// That makes invariant 1 a test of the action switch's classification, which
-/// is precisely what #4445 got wrong.
-///
-/// `best_bid`/`best_ask` return kUndefPrice when the side is empty. Callers
-/// MUST guard that before comparing — unguarded, kUndefPrice reads as the best
-/// possible ask.
+/// `mutation_count()` counts applied records, not orders touched: a Clear
+/// counts once. `best_bid`/`best_ask` return kUndefPrice for an empty side.
 template <typename B>
 concept BookLike = requires(const B& b, std::uint32_t iid, std::uint64_t oid) {
   { b.mutation_count() } -> std::convertible_to<std::uint64_t>;
@@ -62,45 +49,42 @@ struct Violation {
 
 struct InvariantReport {
   std::uint64_t records = 0;
-  std::uint64_t mutating_records = 0;    ///< A + C + M + R
-  std::uint64_t passive_records = 0;     ///< T + F + N
-  std::uint64_t observed_mutations = 0;  ///< what the book actually did
+  std::uint64_t mutating_records = 0;  ///< A + C + M + R
+  std::uint64_t passive_records = 0;   ///< T + F + N
+  std::uint64_t observed_mutations = 0;
   std::uint64_t passive_mutations = 0;   ///< violations: a T/F/N that mutated
-  std::uint64_t boundaries = 0;    ///< F_LAST records seen while Trading
-  std::uint64_t cross_checks = 0;  ///< boundaries where both sides existed
+  std::uint64_t mutation_miscounts = 0;  ///< violations: an A/C/M/R counted != 1
+  std::uint64_t boundaries = 0;          ///< F_LAST records seen while Trading
+  std::uint64_t cross_checks = 0;        ///< boundaries where both sides existed
   std::uint64_t cross_violations = 0;
   std::uint64_t materializations = 0;
+  std::uint64_t dematerializations = 0;  ///< violations: a T/F erased the order it names
   std::uint64_t unknown_order_fills = 0;
   std::uint64_t malformed_records = 0;
   std::vector<Violation> violations;
 
-  /// Context for the FIRST violation only: that record and the ones preceding
-  /// it, in arrival order. One mismatch cascades, so only the first is
-  /// informative .
+  /// The first violation's record and the records preceding it, in arrival
+  /// order.
   std::vector<MboMsg> first_violation_context;
 
   [[nodiscard]] bool reconciles() const noexcept { return observed_mutations == mutating_records; }
 
   [[nodiscard]] bool ok() const noexcept {
-    return reconciles() && passive_mutations == 0 && cross_violations == 0 &&
-           materializations == 0 && malformed_records == 0;
+    return reconciles() && passive_mutations == 0 && mutation_miscounts == 0 &&
+           cross_violations == 0 && materializations == 0 && dematerializations == 0 &&
+           malformed_records == 0;
   }
 };
 
-/// Wraps a book under test: call before(), apply the record to the book, then
-/// after(). Non-owning and non-intrusive — the book does not know it is being
-/// checked, so the same harness runs against the real Book, the test doubles,
-/// and a fuzzer's output unchanged.
+/// Call before(), apply the record to the book, then after(). Non-owning.
 template <BookLike Book>
 class InvariantHarness {
  public:
   static constexpr std::size_t kContextDepth = 8;
 
   struct Options {
-    /// Check the crossed-book invariant every Nth event boundary. 1 checks
-    /// every boundary — correct for tests, but at ~26.9M boundaries per
-    /// instrument-day it is a real cost on a full replay, so it is a knob.
-    /// 0 disables the check.
+    /// Check the crossed-book invariant every Nth event boundary; 0 disables
+    /// it.
     std::uint32_t cross_check_period = 1;
     std::size_t max_violations = 16;
   };
@@ -109,13 +93,11 @@ class InvariantHarness {
 
   void set_session_state(SessionState s) noexcept { session_ = s; }
 
-  [[nodiscard]] SessionState session_state() const noexcept { return session_; }
-
   void before(const MboMsg& rec) {
     pre_mutations_ = book_->mutation_count();
     pre_contained_ = false;
     if (probes_membership(action_of(rec)) && rec.order_id != 0) {
-      pre_contained_ = book_->contains(rec.instrument_id, rec.order_id);
+      pre_contained_ = book_->contains(rec.hd.instrument_id, rec.order_id);
     }
   }
 
@@ -131,6 +113,10 @@ class InvariantHarness {
 
     if (mutates_book(action)) {
       ++report_.mutating_records;
+      if (delta != 1) {
+        ++report_.mutation_miscounts;
+        add(Invariant::kMutationReconciliation, "an A/C/M/R record counted as != 1 mutation", rec);
+      }
     } else {
       ++report_.passive_records;
       if (delta != 0) {
@@ -153,7 +139,7 @@ class InvariantHarness {
   }
 
   void check_well_formed(const MboMsg& rec) {
-    if (rec.rtype != kRTypeMbo || !is_known_action(rec.action) || !is_known_side(rec.side)) {
+    if (rec.hd.rtype != kRTypeMbo || !is_known_action(rec.action) || !is_known_side(rec.side)) {
       ++report_.malformed_records;
       add(Invariant::kWellFormedRecord, "record is not a well-formed MboMsg", rec);
     }
@@ -163,17 +149,19 @@ class InvariantHarness {
     if (!probes_membership(action) || rec.order_id == 0) {
       return;
     }
-    const bool now_contained = book_->contains(rec.instrument_id, rec.order_id);
+    const bool now_contained = book_->contains(rec.hd.instrument_id, rec.order_id);
     if (!pre_contained_ && now_contained) {
       ++report_.materializations;
       add(Invariant::kNoMaterialization, "order id materialized by a T/F record", rec);
+    } else if (pre_contained_ && !now_contained) {
+      ++report_.dematerializations;
+      add(Invariant::kNoMaterialization, "resting order erased by a T/F record", rec);
     } else if (action == Action::kFill && !pre_contained_ && !now_contained) {
       ++report_.unknown_order_fills;
     }
   }
 
-  // CME and Databento both state the book is undefined mid-event, so this
-  // asserts only at F_LAST markers
+  // CME and Databento both document the book as undefined mid-event.
   void check_uncrossed(const MboMsg& rec) {
     if (!is_event_boundary(rec) || session_ != SessionState::kTrading) {
       return;
@@ -182,8 +170,8 @@ class InvariantHarness {
     if (opts_.cross_check_period == 0 || (report_.boundaries % opts_.cross_check_period) != 0) {
       return;
     }
-    const std::int64_t bid = book_->best_bid(rec.instrument_id);
-    const std::int64_t ask = book_->best_ask(rec.instrument_id);
+    const std::int64_t bid = book_->best_bid(rec.hd.instrument_id);
+    const std::int64_t ask = book_->best_ask(rec.hd.instrument_id);
     if (is_undef_price(bid) || is_undef_price(ask)) {
       return;
     }
@@ -202,7 +190,7 @@ class InvariantHarness {
     v.invariant = inv;
     v.what = what;
     v.record_index = report_.records - 1;
-    v.instrument_id = rec.instrument_id;
+    v.instrument_id = rec.hd.instrument_id;
     v.action = rec.action;
     v.order_id = rec.order_id;
     return v;
@@ -248,8 +236,7 @@ class InvariantHarness {
   std::size_t ring_filled_ = 0;
 };
 
-/// Convenience for the common case: feed a whole stream through a book with
-/// the harness attached. `Book` must expose `apply(const MboMsg&)`.
+/// `Book` must additionally expose `apply(const MboMsg&)`.
 template <BookLike Book, typename Range>
 InvariantReport run_checked(Book& book, const Range& records, SessionState state,
                             typename InvariantHarness<Book>::Options opts = {}) {
