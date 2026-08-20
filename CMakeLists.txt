@@ -35,6 +35,8 @@ include(Zstd)
 add_library(bookreplay
   src/dbn.cpp
   src/dbn_reader.cpp
+  src/order.cpp
+  src/trade_source.cpp
 )
 add_library(bookreplay::bookreplay ALIAS bookreplay)
 

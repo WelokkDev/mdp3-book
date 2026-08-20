@@ -16,6 +16,8 @@ add_executable(bookreplay_tests
   test_dbn_reader.cpp
   test_dbn_roundtrip.cpp
   test_invariants.cpp
+  test_order.cpp
+  test_trade_source.cpp
 )
 
 target_include_directories(bookreplay_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
