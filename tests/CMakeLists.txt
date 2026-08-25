@@ -17,6 +17,8 @@ add_executable(bookreplay_tests
   test_dbn_roundtrip.cpp
   test_invariants.cpp
   test_order.cpp
+  test_replay.cpp
+  test_replay_invariants.cpp
   test_trade_source.cpp
 )
 

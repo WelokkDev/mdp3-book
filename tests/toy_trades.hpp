@@ -17,19 +17,16 @@ class TradeStreamBuilder {
   explicit TradeStreamBuilder(std::uint32_t instrument_id = 42004177)
       : instrument_id_(instrument_id) {}
 
-  /// `aggressor` is the side that initiated: Bid for a buy lifting the offer.
   TradeStreamBuilder& trade(Side aggressor, std::int64_t price, std::uint32_t size) {
     push(aggressor, price, size);
     return *this;
   }
 
-  /// An opening-auction or implied print: a real trade with no aggressor.
   TradeStreamBuilder& auction(std::int64_t price, std::uint32_t size) {
     push(Side::kNone, price, size);
     return *this;
   }
 
-  /// The next print's cursor instant, absolute.
   TradeStreamBuilder& at(std::int64_t ts_recv_ns) {
     pending_ts_ = ts_recv_ns;
     return *this;
@@ -40,18 +37,8 @@ class TradeStreamBuilder {
     return *this;
   }
 
-  TradeStreamBuilder& gap(std::int64_t ns) {
-    pending_ts_ = last_ts_ + ns;
-    return *this;
-  }
-
   TradeStreamBuilder& instrument(std::uint32_t instrument_id) {
     instrument_id_ = instrument_id;
-    return *this;
-  }
-
-  TradeStreamBuilder& set_flags(std::uint8_t flags) {
-    records_.back().flags |= flags;
     return *this;
   }
 
@@ -80,7 +67,7 @@ class TradeStreamBuilder {
   [[nodiscard]] std::uint32_t instrument_id() const noexcept { return instrument_id_; }
 
  private:
-  TradeMsg& push(Side side, std::int64_t price, std::uint32_t size) {
+  void push(Side side, std::int64_t price, std::uint32_t size) {
     const std::int64_t ts = pending_ts_ != kUnset ? pending_ts_ : last_ts_ + step_ns_;
     pending_ts_ = kUnset;
     last_ts_ = ts;
@@ -101,7 +88,6 @@ class TradeStreamBuilder {
     r.ts_in_delta = static_cast<std::int32_t>(kTsInDelta);
     r.sequence = seq_++;
     records_.push_back(r);
-    return records_.back();
   }
 
   static constexpr std::int64_t kUnset = -1;

@@ -4,7 +4,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <optional>
 #include <vector>
 
@@ -21,9 +20,6 @@ using testing::as_mbo_trades;
 using testing::px;
 using testing::TradeStreamBuilder;
 
-constexpr std::uint64_t k0 = 0;
-constexpr std::uint64_t k1 = 1;
-
 TradeStreamBuilder two_prints() {
   TradeStreamBuilder b;
   b.trade(Side::kBid, px(29000, 1), 3);
@@ -37,28 +33,28 @@ TEST(TradeSource, NormalizesATradeMsgAndAnMboTradeIntoTheSameTick) {
   RecordTradeSource from_trades{b.records()};
   RecordTradeSource from_mbo{as_mbo_trades(b)};
 
-  const std::vector<Tick> a = collect(from_trades);
-  const std::vector<Tick> c = collect(from_mbo);
+  const std::vector<Tick> trade_ticks = collect(from_trades);
+  const std::vector<Tick> mbo_ticks = collect(from_mbo);
 
-  ASSERT_EQ(a.size(), c.size());
-  ASSERT_EQ(a.size(), std::size_t{2});
-  for (std::size_t i = 0; i < a.size(); ++i) {
-    EXPECT_EQ(a[i].ts, c[i].ts);
-    EXPECT_EQ(a[i].ts_event, c[i].ts_event);
-    EXPECT_EQ(a[i].price, c[i].price);
-    EXPECT_EQ(a[i].size, c[i].size);
-    EXPECT_EQ(a[i].instrument_id, c[i].instrument_id);
-    EXPECT_EQ(a[i].sequence, c[i].sequence);
-    EXPECT_EQ(a[i].aggressor, c[i].aggressor);
+  ASSERT_EQ(trade_ticks.size(), mbo_ticks.size());
+  ASSERT_EQ(trade_ticks.size(), std::size_t{2});
+  for (std::size_t i = 0; i < trade_ticks.size(); ++i) {
+    EXPECT_EQ(trade_ticks[i].ts, mbo_ticks[i].ts);
+    EXPECT_EQ(trade_ticks[i].ts_event, mbo_ticks[i].ts_event);
+    EXPECT_EQ(trade_ticks[i].price, mbo_ticks[i].price);
+    EXPECT_EQ(trade_ticks[i].size, mbo_ticks[i].size);
+    EXPECT_EQ(trade_ticks[i].instrument_id, mbo_ticks[i].instrument_id);
+    EXPECT_EQ(trade_ticks[i].sequence, mbo_ticks[i].sequence);
+    EXPECT_EQ(trade_ticks[i].aggressor, mbo_ticks[i].aggressor);
   }
 }
 
-TEST(TradeSource, ReadsOnlyActionTFromAnMboStreamBecauseFillsDuplicateTheVolume) {
+TEST(TradeSource, TurnsOnlyActionTIntoATickOnAnMboStream) {
   RecordTradeSource source{testing::clean_trade_event()};
   const std::vector<Tick> ticks = collect(source);
 
   EXPECT_EQ(ticks.size(), std::size_t{1});
-  EXPECT_EQ(source.stats().ticks, k1);
+  EXPECT_EQ(source.stats().ticks, std::uint64_t{1});
   EXPECT_TRUE(source.stats().reconciles());
 }
 
@@ -71,8 +67,8 @@ TEST(TradeSource, KeepsAndCountsAPrintWithNoAggressor) {
 
   ASSERT_EQ(ticks.size(), std::size_t{1});
   EXPECT_EQ(ticks[0].aggressor, Side::kNone);
-  EXPECT_EQ(source.stats().no_aggressor, k1);
-  EXPECT_EQ(source.stats().ticks, k1);
+  EXPECT_EQ(source.stats().no_aggressor, std::uint64_t{1});
+  EXPECT_EQ(source.stats().ticks, std::uint64_t{1});
 }
 
 TEST(TradeSource, DropsAndCountsAPrintWithAnUndefinedPrice) {
@@ -81,7 +77,7 @@ TEST(TradeSource, DropsAndCountsAPrintWithAnUndefinedPrice) {
 
   RecordTradeSource source{b.records()};
   EXPECT_TRUE(collect(source).empty());
-  EXPECT_EQ(source.stats().undef_price, k1);
+  EXPECT_EQ(source.stats().undef_price, std::uint64_t{1});
   EXPECT_TRUE(source.stats().reconciles());
 }
 
@@ -91,21 +87,21 @@ TEST(TradeSource, DropsAndCountsAZeroSizePrint) {
 
   RecordTradeSource source{b.records()};
   EXPECT_TRUE(collect(source).empty());
-  EXPECT_EQ(source.stats().zero_size, k1);
+  EXPECT_EQ(source.stats().zero_size, std::uint64_t{1});
   EXPECT_TRUE(source.stats().reconciles());
 }
 
-TEST(TradeSource, RefusesTsRecvOnARecordFlaggedBadTsRecv) {
+TEST(TradeSource, DropsAndCountsARecordFlaggedBadTsRecv) {
   TradeStreamBuilder b;
   b.trade(Side::kBid, px(29000, 0), 4).bad_ts_recv();
 
   RecordTradeSource source{b.records()};
   EXPECT_TRUE(collect(source).empty());
-  EXPECT_EQ(source.stats().bad_ts_recv, k1);
+  EXPECT_EQ(source.stats().bad_ts_recv, std::uint64_t{1});
   EXPECT_TRUE(source.stats().reconciles());
 }
 
-TEST(TradeSource, FiltersToOneInstrumentSoASpreadPrintCannotElectAnOutrightStop) {
+TEST(TradeSource, KeepsOnlyTheRequestedInstrumentId) {
   TradeStreamBuilder b;
   b.trade(Side::kBid, px(29000, 0), 4);
   b.instrument(999).trade(Side::kBid, px(1, 0), 4);
@@ -117,7 +113,7 @@ TEST(TradeSource, FiltersToOneInstrumentSoASpreadPrintCannotElectAnOutrightStop)
   const std::vector<Tick> ticks = collect(source);
   ASSERT_EQ(ticks.size(), std::size_t{1});
   EXPECT_EQ(ticks[0].instrument_id, 42004177U);
-  EXPECT_EQ(source.stats().skipped_other_instrument, k1);
+  EXPECT_EQ(source.stats().skipped_other_instrument, std::uint64_t{1});
   EXPECT_TRUE(source.stats().reconciles());
 }
 
@@ -180,12 +176,12 @@ TEST(TradeSource, EveryRecordItReadLandsInExactlyOneCounter) {
 
   const TradeSourceStats& s = source.stats();
   EXPECT_EQ(s.records, std::uint64_t{5});
-  EXPECT_EQ(s.ticks, k1);
-  EXPECT_EQ(s.zero_size, k1);
-  EXPECT_EQ(s.undef_price, k1);
-  EXPECT_EQ(s.bad_ts_recv, k1);
-  EXPECT_EQ(s.skipped_other_instrument, k1);
-  EXPECT_EQ(s.skipped_non_trade, k0);
+  EXPECT_EQ(s.ticks, std::uint64_t{1});
+  EXPECT_EQ(s.zero_size, std::uint64_t{1});
+  EXPECT_EQ(s.undef_price, std::uint64_t{1});
+  EXPECT_EQ(s.bad_ts_recv, std::uint64_t{1});
+  EXPECT_EQ(s.skipped_other_instrument, std::uint64_t{1});
+  EXPECT_EQ(s.skipped_non_trade, std::uint64_t{0});
   EXPECT_TRUE(s.reconciles());
 }
 

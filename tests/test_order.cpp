@@ -47,12 +47,6 @@ TEST(TickScale, RejectsATickCountThatWouldOverflowTheWirePrice) {
   EXPECT_THROW((void)scale.to_price(-scale.max_ticks() - 1), ReplayError);
 }
 
-TEST(TickScale, RecognizesAPrintThatDoesNotLandOnATick) {
-  const TickScale scale{kTick};
-  EXPECT_TRUE(scale.on_tick(px(29000, 1)));
-  EXPECT_FALSE(scale.on_tick(px(29000, 1) + 1));
-}
-
 TEST(TickScale, RejectsANonPositiveTickSize) {
   EXPECT_THROW((TickScale{0}), ReplayError);
   EXPECT_THROW((TickScale{-kTick}), ReplayError);
@@ -124,7 +118,7 @@ TEST(OrderValidation, RejectsAStopLimitWhoseCapIsOnTheWrongSideOfItsTrigger) {
   EXPECT_NO_THROW(validate(sell, scale));
 }
 
-TEST(OrderNames, AreStableAcrossEveryEnumerator) {
+TEST(OrderNames, RenderEnumeratorsAsTheirSnakeCaseText) {
   EXPECT_STREQ(order_type_name(OrderType::kStopLimit), "stop_limit");
   EXPECT_STREQ(order_status_name(OrderStatus::kOcoCancelled), "oco_cancelled");
   EXPECT_STREQ(fill_reason_name(FillReason::kStopElected), "stop_elected");

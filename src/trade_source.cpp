@@ -10,8 +10,7 @@ namespace {
   return opts.instrument_id == kAnyInstrument || opts.instrument_id == iid;
 }
 
-/// Databento delivers GLBX in ts_recv order, so a backward step means the
-/// stream was reordered upstream.
+/// Databento delivers GLBX in ts_recv order.
 void require_monotone(std::int64_t prev, std::int64_t ts) {
   if (prev != kNotStarted && ts < prev) {
     throw ReplayError("trade prints are not monotone in ts_recv; the stream was reordered");
@@ -23,11 +22,9 @@ void require_monotone(std::int64_t prev, std::int64_t ts) {
          ts_recv <= static_cast<std::uint64_t>(kNever);
 }
 
-/// DBN metadata schema ids.
 constexpr std::uint16_t kSchemaMbo = 0;
 constexpr std::uint16_t kSchemaTrades = 4;
 
-/// A capture of mixed schemas carries no schema id in its metadata.
 void require_trade_schema(const DbnMetadata& meta) {
   if (meta.schema && *meta.schema != kSchemaMbo && *meta.schema != kSchemaTrades) {
     throw ReplayError("file schema is neither trades nor mbo; the replay would be silently empty");
@@ -35,8 +32,8 @@ void require_trade_schema(const DbnMetadata& meta) {
 }
 
 template <typename Rec>
-[[nodiscard]] bool normalize_impl(const Rec& rec, const TradeSourceOptions& opts, Tick& out,
-                                  TradeSourceStats& stats) {
+[[nodiscard]] bool normalize(const Rec& rec, const TradeSourceOptions& opts, Tick& out,
+                             TradeSourceStats& stats) {
   ++stats.records;
   if (!is_known_action(rec.action)) {
     throw ReplayError("record carries an action byte outside the documented set");
@@ -72,7 +69,6 @@ template <typename Rec>
   out.instrument_id = rec.hd.instrument_id;
   out.sequence = rec.sequence;
   out.aggressor = static_cast<Side>(rec.side);
-  out.flags = rec.flags;
 
   ++stats.ticks;
   if (out.aggressor == Side::kNone) {
@@ -82,16 +78,6 @@ template <typename Rec>
 }
 
 }  // namespace
-
-bool normalize(const TradeMsg& rec, const TradeSourceOptions& opts, Tick& out,
-               TradeSourceStats& stats) {
-  return normalize_impl(rec, opts, out, stats);
-}
-
-bool normalize(const MboMsg& rec, const TradeSourceOptions& opts, Tick& out,
-               TradeSourceStats& stats) {
-  return normalize_impl(rec, opts, out, stats);
-}
 
 TradeSource::~TradeSource() = default;
 
@@ -174,13 +160,13 @@ RecordTradeSource::RecordTradeSource(std::vector<MboMsg> records, TradeSourceOpt
 RecordTradeSource::~RecordTradeSource() = default;
 
 const Tick* RecordTradeSource::next() {
-  const std::size_t count = impl_->trades.empty() ? impl_->mbo.size() : impl_->trades.size();
+  const bool from_mbo = impl_->trades.empty();
+  const std::size_t count = from_mbo ? impl_->mbo.size() : impl_->trades.size();
   while (impl_->pos < count) {
-    const std::size_t at = impl_->pos++;
+    const std::size_t index = impl_->pos++;
     const bool accepted =
-        impl_->trades.empty()
-            ? normalize(impl_->mbo[at], impl_->opts, impl_->slot, impl_->stats)
-            : normalize(impl_->trades[at], impl_->opts, impl_->slot, impl_->stats);
+        from_mbo ? normalize(impl_->mbo[index], impl_->opts, impl_->slot, impl_->stats)
+                 : normalize(impl_->trades[index], impl_->opts, impl_->slot, impl_->stats);
     if (!accepted) {
       continue;
     }

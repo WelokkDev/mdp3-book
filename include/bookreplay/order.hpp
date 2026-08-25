@@ -9,8 +9,6 @@
 
 namespace bookreplay {
 
-/// Thrown on a request the model cannot represent or cannot honour; a rejected
-/// order is never half-accepted.
 class ReplayError : public std::runtime_error {
  public:
   using std::runtime_error::runtime_error;
@@ -112,29 +110,24 @@ class TickScale {
     return ticks * tick_size_;
   }
 
-  // Integer division truncates toward zero.
   [[nodiscard]] constexpr std::int64_t to_ticks(std::int64_t price) const noexcept {
-    const std::int64_t q = price / tick_size_;
-    return (price % tick_size_ < 0) ? q - 1 : q;
-  }
-
-  [[nodiscard]] constexpr bool on_tick(std::int64_t price) const noexcept {
-    return price % tick_size_ == 0;
+    const std::int64_t truncated = price / tick_size_;
+    return price % tick_size_ < 0 ? truncated - 1 : truncated;
   }
 
  private:
   std::int64_t tick_size_;
 };
 
-/// `live_from_ns` is the instant the caller decided, not the instant the order
-/// reaches the venue: the engine adds the latency `latency` names.
+/// `live_from_ns` is the decision instant, not the arrival instant: the engine
+/// adds `latency` on top of it.
 struct Order {
   OrderId id = 0;
   OrderType type = OrderType::kMarket;
   Side side = Side::kNone;
   std::uint32_t qty = 0;
-  std::int64_t trigger_ticks = 0;  ///< kStop and kStopLimit only
-  std::int64_t limit_ticks = 0;    ///< kLimit and kStopLimit only
+  std::int64_t trigger_ticks = 0;
+  std::int64_t limit_ticks = 0;
   std::int64_t live_from_ns = 0;
   OcoGroup oco_group = kNoOcoGroup;
   LatencyClass latency = LatencyClass::kOrderEntry;
@@ -144,15 +137,15 @@ struct Fill {
   std::uint64_t seq = 0;  ///< strictly increasing across a run
   OrderId order_id = 0;
   OcoGroup oco_group = kNoOcoGroup;
-  std::int64_t ts_ns = 0;  ///< the print's instant on the replay clock
+  std::int64_t ts_ns = 0;
   std::int64_t ts_event = 0;
   std::int64_t price = 0;  ///< 1e-9 fixed point
   std::int64_t price_ticks = 0;
   std::uint32_t qty = 0;
-  std::uint32_t remaining = 0;   ///< of that order, after this fill
-  std::uint32_t print_size = 0;  ///< the electing or filling print's size
-  std::uint32_t sequence = 0;    ///< the print's DBN sequence
-  Side side = Side::kNone;       ///< ours
+  std::uint32_t remaining = 0;
+  std::uint32_t print_size = 0;
+  std::uint32_t sequence = 0;
+  Side side = Side::kNone;
   Side aggressor = Side::kNone;  ///< kNone is an auction or implied print
   FillReason reason = FillReason::kMarket;
 };
@@ -196,7 +189,6 @@ struct OrderView {
          s == OrderStatus::kOcoCancelled;
 }
 
-/// Throws ReplayError naming the offending field.
 void validate(const Order& order, const TickScale& scale);
 
 [[nodiscard]] const char* order_type_name(OrderType t) noexcept;
