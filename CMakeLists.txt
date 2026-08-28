@@ -15,6 +15,7 @@ endif()
 option(BOOKREPLAY_BUILD_TESTS "Build the test suite" ${BOOKREPLAY_IS_TOP_LEVEL})
 option(BOOKREPLAY_BUILD_TOOLS "Build the command-line tools" ${BOOKREPLAY_IS_TOP_LEVEL})
 option(BOOKREPLAY_BUILD_ORACLE "Build the databento-cpp differential oracle (requires an installed databento-cpp)" OFF)
+option(BOOKREPLAY_BUILD_PYTHON "Build the pybind11 extension module" OFF)
 option(BOOKREPLAY_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -26,6 +27,11 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(BOOKREPLAY_IS_TOP_LEVEL AND NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Debug CACHE STRING "" FORCE)
+endif()
+
+# Set before include(Zstd): the fetched targets read it when they are created.
+if(BOOKREPLAY_BUILD_PYTHON)
+  set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -61,4 +67,9 @@ endif()
 
 if(BOOKREPLAY_BUILD_ORACLE)
   add_subdirectory(tests/oracle)
+endif()
+
+if(BOOKREPLAY_BUILD_PYTHON)
+  include(Pybind11)
+  add_subdirectory(python)
 endif()

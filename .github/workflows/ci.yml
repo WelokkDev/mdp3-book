@@ -146,6 +146,46 @@ jobs:
           ./build/tests/oracle/oracle_diff
           tests/data/*.v3.dbn.zst tests/data/test_data.mbo.v3.dbn
 
+  # Windows is in the matrix because the module is the only target that needs
+  # /external: to keep -Werror off pybind11's headers, and nothing else here
+  # would catch that flag rotting.
+  python:
+    name: pybind11 module (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-latest
+          - name: windows
+            os: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: lukka/get-cmake@latest
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: MSVC developer environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - run: pip install pytest
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DBOOKREPLAY_BUILD_PYTHON=ON
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build -L python --output-on-failure
+
   format:
     name: clang-format
     runs-on: ubuntu-latest

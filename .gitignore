@@ -53,6 +53,7 @@ spec.md
 # Reports
 reports/
 reviews/
+ctest_out.txt
 *.perf
 perf.data*
 

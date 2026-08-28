@@ -8,6 +8,7 @@
 #include <cstring>
 #include <memory>
 #include <random>
+#include <type_traits>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -264,8 +265,8 @@ TEST(Differential, TheEngineAndTheToyOracleAgreeOnRandomStreamsAndScripts) {
   for (int round = 0; round < 40; ++round) {
     TradeStreamBuilder b;
     std::int64_t level = tk(29000, 0);
-    const int prints = 20 + static_cast<int>(rng() % 20);
-    for (int i = 0; i < prints; ++i) {
+    const std::uint64_t prints = 20 + rng() % 20;
+    for (std::uint64_t i = 0; i < prints; ++i) {
       level += static_cast<std::int64_t>(rng() % 5) - 2;
       const std::uint32_t size = 1 + static_cast<std::uint32_t>(rng() % 5);
       switch (rng() % 5) {
@@ -371,8 +372,11 @@ TEST(Digest, IgnoresStructPaddingSoTwoEqualFillsAlwaysAgree) {
   clean.aggressor = Side::kAsk;
   clean.reason = FillReason::kLimitThrough;
 
+  // Dirtying the padding is the whole point, so the bytes go in through a
+  // void* -- writing a class type through memset is a warning otherwise.
+  static_assert(std::is_trivially_copyable_v<Fill>);
   Fill dirty;
-  std::memset(&dirty, 0xFF, sizeof(Fill));
+  std::memset(static_cast<void*>(&dirty), 0xFF, sizeof(Fill));
   dirty.seq = clean.seq;
   dirty.order_id = clean.order_id;
   dirty.oco_group = clean.oco_group;
