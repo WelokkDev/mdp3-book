@@ -6,7 +6,10 @@ namespace bookreplay {
 
 namespace {
 
-void require_representable(const TickScale& scale, std::int64_t ticks, const char* what) {
+void require_price(const TickScale& scale, std::int64_t ticks, const char* what) {
+  if (ticks == 0) {
+    throw ReplayError(std::string("order ") + what + " price is unset");
+  }
   if (!scale.representable(ticks)) {
     throw ReplayError(std::string("order ") + what + " does not fit a wire price");
   }
@@ -25,10 +28,16 @@ void validate(const Order& order, const TickScale& scale) {
     throw ReplayError("order live_from_ns must be a non-negative unix nanosecond instant");
   }
   if (uses_trigger(order.type)) {
-    require_representable(scale, order.trigger_ticks, "trigger");
+    require_price(scale, order.trigger_ticks, "trigger");
+  } else if (order.trigger_ticks != 0) {
+    throw ReplayError(std::string("a ") + order_type_name(order.type) +
+                      " order must leave trigger_ticks at 0");
   }
   if (uses_limit(order.type)) {
-    require_representable(scale, order.limit_ticks, "limit");
+    require_price(scale, order.limit_ticks, "limit");
+  } else if (order.limit_ticks != 0) {
+    throw ReplayError(std::string("a ") + order_type_name(order.type) +
+                      " order must leave limit_ticks at 0");
   }
   if (order.type == OrderType::kStopLimit) {
     const bool inverted = order.side == Side::kBid ? order.limit_ticks < order.trigger_ticks
@@ -67,6 +76,8 @@ const char* order_status_name(OrderStatus s) noexcept {
       return "cancelled";
     case OrderStatus::kOcoCancelled:
       return "oco_cancelled";
+    case OrderStatus::kRejected:
+      return "rejected";
   }
   return "?";
 }

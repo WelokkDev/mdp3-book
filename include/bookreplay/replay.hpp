@@ -26,8 +26,8 @@ struct ReplayConfig {
   TickScale scale;
   NoAggressorPolicy no_aggressor = NoAggressorPolicy::kNeitherSide;
   FillSizePolicy fill_size = FillSizePolicy::kPrintCapped;
-  /// Hints, not caps: growth past them is counted in ReplayStats::reallocations.
   std::size_t reserve_live_orders = 64;
+  /// A hint, not a cap: growth past it is counted in ReplayStats::reallocations.
   std::size_t reserve_fills_per_advance = 256;
   bool retain_ticks = false;
 };
@@ -37,7 +37,11 @@ struct ReplayStats {
   std::uint64_t no_aggressor_ticks = 0;
   /// Prints through a resting order's price that kNeitherSide refused.
   std::uint64_t no_aggressor_passive_skips = 0;
+  /// Contracts filled a tick off the print because the other side aggressed it.
+  std::uint64_t tick_charged_qty = 0;
   std::uint64_t elections = 0;
+  /// Stops whose trigger was already through the last print when they armed.
+  std::uint64_t stop_entry_rejects = 0;
   std::uint64_t fills = 0;
   std::uint64_t partial_fills = 0;
   std::uint64_t oco_reductions = 0;
@@ -46,7 +50,7 @@ struct ReplayStats {
   /// Orders whose effective live instant was already behind the cursor at
   /// submit; accepted, not clamped.
   std::uint64_t late_arm_orders = 0;
-  std::int64_t late_arm_ns_total = 0;
+  std::uint64_t late_arm_ns_total = 0;
   /// Growth of the per-advance fill and tick buffers.
   std::uint64_t reallocations = 0;
 };
@@ -73,8 +77,8 @@ class Replay {
   void cancel_at(OrderId id, std::int64_t request_ts_ns);
 
   /// Every fill in (previous cursor, ts_ns], in order. Monotonic: an earlier
-  /// timestamp throws, the same timestamp is an empty no-op. The span is valid
-  /// only until the next call.
+  /// timestamp throws ReplayError, the same timestamp is an empty no-op. The
+  /// span is valid only until the next call.
   [[nodiscard]] std::span<const Fill> advance_to(std::int64_t ts_ns);
 
   /// The prints the last advance_to consumed, in stream order; empty unless

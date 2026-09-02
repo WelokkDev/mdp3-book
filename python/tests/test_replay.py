@@ -270,6 +270,48 @@ def test_ticks_from_refuses_an_undefined_price() -> None:
         br.ticks_from([br.Tick(ts=T0, price=2**63 - 1, size=5, aggressor=br.Side.ASK)])
 
 
+def test_a_market_buy_pays_a_tick_through_a_print_the_other_side_aggressed() -> None:
+    replay = br.Replay(falling(), config())
+    replay.submit(
+        br.Order(id=1, type=br.OrderType.MARKET, side=br.Side.BID, qty=1, live_from_ns=T0)
+    )
+
+    fills = replay.advance_to(T0 + 10 * MS)
+    assert len(fills) == 1
+    assert fills[0].price == px(29000, 1)
+    assert replay.stats.tick_charged_qty == 1
+
+
+def test_a_stop_already_through_the_market_is_refused_at_order_entry() -> None:
+    replay = br.Replay(rising(), config(entry_ns=MS + MS // 2))
+    replay.submit(
+        br.Order(
+            id=1,
+            type=br.OrderType.STOP,
+            side=br.Side.ASK,
+            qty=1,
+            trigger_ticks=tk(29010, 0),
+            live_from_ns=T0,
+        )
+    )
+
+    assert replay.advance_to(T0 + 10 * MS) == []
+    assert replay.order(1).status == br.OrderStatus.REJECTED
+    assert replay.stats.stop_entry_rejects == 1
+
+
+def test_ticks_from_refuses_a_negative_timestamp() -> None:
+    with pytest.raises(br.ReplayError):
+        br.ticks_from([br.Tick(ts=-1, price=px(29000, 0), size=5, aggressor=br.Side.ASK)])
+
+
+def test_a_decode_failure_surfaces_as_dbn_error_not_as_its_base() -> None:
+    assert issubclass(br.DbnError, br.BookreplayError)
+    assert issubclass(br.ReplayError, br.BookreplayError)
+    with pytest.raises(br.DbnError):
+        br.load_ticks("no_such_file.dbn", instrument_id=br.ANY_INSTRUMENT)
+
+
 def test_dbn_entry_points_require_an_explicit_instrument_id() -> None:
     with pytest.raises(TypeError):
         br.load_ticks("unused.dbn")  # type: ignore[call-arg]

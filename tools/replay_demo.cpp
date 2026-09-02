@@ -233,14 +233,14 @@ void print_fill(const Fill& f) {
               fill_reason_name(f.reason));
 }
 
+void stat_row(const char* label, const char* name, std::uint64_t value) {
+  std::fprintf(stderr, "%s%s\t%llu\n", label, name, static_cast<unsigned long long>(value));
+}
+
 /// Counters go to stderr so stdout carries exactly one table, whichever the
 /// report mode is.
-void print_stats(const Replay& replay, const char* label) {
-  const TradeSourceStats& s = replay.source_stats();
-  const ReplayStats& r = replay.stats();
-  const auto row = [label](const char* name, std::uint64_t value) {
-    std::fprintf(stderr, "%s%s\t%llu\n", label, name, static_cast<unsigned long long>(value));
-  };
+void print_source_stats(const TradeSourceStats& s, const char* label) {
+  const auto row = [label](const char* name, std::uint64_t value) { stat_row(label, name, value); };
   row("records", s.records);
   row("ticks", s.ticks);
   row("skipped_non_trade", s.skipped_non_trade);
@@ -250,13 +250,19 @@ void print_stats(const Replay& replay, const char* label) {
   row("bad_ts_recv", s.bad_ts_recv);
   row("no_aggressor", s.no_aggressor);
   row("source_reconciles", s.reconciles());
+}
+
+void print_replay_stats(const ReplayStats& r, const char* label) {
+  const auto row = [label](const char* name, std::uint64_t value) { stat_row(label, name, value); };
   row("elections", r.elections);
+  row("stop_entry_rejects", r.stop_entry_rejects);
   row("fills", r.fills);
   row("partial_fills", r.partial_fills);
   row("oco_reductions", r.oco_reductions);
   row("oco_cancels", r.oco_cancels);
   row("cancels_applied", r.cancels_applied);
   row("no_aggressor_passive_skips", r.no_aggressor_passive_skips);
+  row("tick_charged_qty", r.tick_charged_qty);
   row("late_arm_orders", r.late_arm_orders);
   row("reallocations", r.reallocations);
 }
@@ -271,7 +277,8 @@ std::vector<Fill> run_once(const Options& opts, std::int64_t entry_ns,
   const std::span<const Fill> fills = replay.advance_to(kNever);
   const std::vector<Fill> out{fills.begin(), fills.end()};
   if (report_stats) {
-    print_stats(replay, "");
+    print_source_stats(replay.source_stats(), "");
+    print_replay_stats(replay.stats(), "");
   }
   return out;
 }
@@ -281,6 +288,9 @@ int run_sweep(const Options& opts, const std::vector<Order>& orders) {
   const std::vector<Tick> day = collect(*source);
   std::fprintf(stderr, "decoded %zu prints once for %zu latency points\n", day.size(),
                opts.sweep.size());
+  if (opts.stats) {
+    print_source_stats(source->stats(), "");
+  }
 
   std::printf("entry_ns\tfills\tfilled_qty\tfirst_fill_ts\tlast_fill_ts\n");
   for (const std::int64_t entry_ns : opts.sweep) {
@@ -300,7 +310,7 @@ int run_sweep(const Options& opts, const std::vector<Order>& orders) {
                 static_cast<long long>(fills.empty() ? 0 : fills.back().ts_ns));
     if (opts.stats) {
       const std::string label = std::to_string(entry_ns) + "\t";
-      print_stats(replay, label.c_str());
+      print_replay_stats(replay.stats(), label.c_str());
     }
   }
   return 0;
@@ -370,11 +380,9 @@ int main(int argc, char** argv) {
         return usage();
       }
     } else if (arg == "--instrument" && has_value) {
-      std::int64_t value = 0;
-      if (!parse_i64(argv[++i], value) || value < 0) {
+      if (!parse_u32(argv[++i], opts.instrument_id)) {
         return usage();
       }
-      opts.instrument_id = static_cast<std::uint32_t>(value);
     } else if (arg == "--reserve-fills" && has_value) {
       std::int64_t value = 0;
       if (!parse_i64(argv[++i], value) || value < 1) {
@@ -436,10 +444,7 @@ int main(int argc, char** argv) {
         print_fill(f);
       }
     }
-  } catch (const DbnError& e) {
-    std::fprintf(stderr, "replay_demo: %s\n", e.what());
-    return 1;
-  } catch (const ReplayError& e) {
+  } catch (const BookreplayError& e) {
     std::fprintf(stderr, "replay_demo: %s\n", e.what());
     return 1;
   }

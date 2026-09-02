@@ -42,12 +42,21 @@ class NakedWindowAccumulator {
     if (query.position_side != Side::kBid && query.position_side != Side::kAsk) {
       throw ReplayError("naked window position side must be bid or ask");
     }
+    if (query.stop_price == 0) {
+      throw ReplayError("naked window stop price is unset");
+    }
+    const bool wrong_side = query.position_side == Side::kBid
+                                ? query.stop_price > query.entry_price
+                                : query.stop_price < query.entry_price;
+    if (wrong_side) {
+      throw ReplayError("a protective stop must sit on the adverse side of the entry price");
+    }
     result_.worst_price = query.entry_price;
     result_.window_end_ns = query.entry_fill_ts + query.window_ns;
   }
 
   void observe(const Tick& tick) {
-    if (tick.ts < query_.entry_fill_ts || tick.ts >= result_.window_end_ns) {
+    if (tick.ts < query_.entry_fill_ts || closed(tick.ts)) {
       return;
     }
     ++result_.ticks;

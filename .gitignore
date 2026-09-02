@@ -15,6 +15,7 @@ metadata.json
 
 # Build
 build/
+Testing/
 out/
 cmake-build-*/
 CMakeFiles/

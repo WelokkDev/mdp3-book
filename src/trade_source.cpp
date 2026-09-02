@@ -13,7 +13,19 @@ namespace {
 /// Databento delivers GLBX in ts_recv order.
 void require_monotone(std::int64_t prev, std::int64_t ts) {
   if (prev != kNotStarted && ts < prev) {
-    throw ReplayError("trade prints are not monotone in ts_recv; the stream was reordered");
+    throw ReplayError("prints are not monotone in ts; the stream was reordered");
+  }
+}
+
+void require_print(const Tick& tick) {
+  if (tick.ts < 0) {
+    throw ReplayError("a tick timestamp is negative; ts is a unix nanosecond");
+  }
+  if (tick.size == 0) {
+    throw ReplayError("a tick with zero size is not a print");
+  }
+  if (is_undef_price(tick.price)) {
+    throw ReplayError("a tick with an undefined price is not a print");
   }
 }
 
@@ -38,6 +50,9 @@ template <typename Rec>
   if (!is_known_action(rec.action)) {
     throw ReplayError("record carries an action byte outside the documented set");
   }
+  if (!is_known_side(rec.side)) {
+    throw ReplayError("record carries a side byte outside the documented set");
+  }
   if (static_cast<Action>(rec.action) != Action::kTrade) {
     ++stats.skipped_non_trade;
     return false;
@@ -45,9 +60,6 @@ template <typename Rec>
   if (!wanted_instrument(rec.hd.instrument_id, opts)) {
     ++stats.skipped_other_instrument;
     return false;
-  }
-  if (!is_known_side(rec.side)) {
-    throw ReplayError("trade print carries a side byte outside the documented set");
   }
   if (is_undef_price(rec.price)) {
     ++stats.undef_price;
@@ -138,6 +150,7 @@ const DbnMetadata& DbnTradeSource::metadata() const noexcept {
 struct RecordTradeSource::Impl {
   std::vector<TradeMsg> trades;
   std::vector<MboMsg> mbo;
+  bool from_mbo = false;
   TradeSourceOptions opts;
   TradeSourceStats stats{};
   Tick slot{};
@@ -154,13 +167,14 @@ RecordTradeSource::RecordTradeSource(std::vector<TradeMsg> records, TradeSourceO
 RecordTradeSource::RecordTradeSource(std::vector<MboMsg> records, TradeSourceOptions opts)
     : impl_(std::make_unique<Impl>()) {
   impl_->mbo = std::move(records);
+  impl_->from_mbo = true;
   impl_->opts = opts;
 }
 
 RecordTradeSource::~RecordTradeSource() = default;
 
 const Tick* RecordTradeSource::next() {
-  const bool from_mbo = impl_->trades.empty();
+  const bool from_mbo = impl_->from_mbo;
   const std::size_t count = from_mbo ? impl_->mbo.size() : impl_->trades.size();
   while (impl_->pos < count) {
     const std::size_t index = impl_->pos++;
@@ -190,6 +204,7 @@ const Tick* TickSpanSource::next() {
     return nullptr;
   }
   const Tick* tick = &ticks_[pos_++];
+  require_print(*tick);
   require_monotone(last_ts_, tick->ts);
   last_ts_ = tick->ts;
   ++stats_.records;

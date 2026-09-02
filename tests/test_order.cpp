@@ -15,6 +15,8 @@ using testing::px;
 
 static_assert(!std::is_default_constructible_v<Latency>);
 static_assert(!std::is_default_constructible_v<TickScale>);
+static_assert(!is_undef_price(TickScale{1}.to_price(TickScale{1}.max_ticks())));
+static_assert(is_terminal(OrderStatus::kRejected));
 
 Order market_order() {
   Order o;
@@ -118,10 +120,67 @@ TEST(OrderValidation, RejectsAStopLimitWhoseCapIsOnTheWrongSideOfItsTrigger) {
   EXPECT_NO_THROW(validate(sell, scale));
 }
 
+TEST(OrderValidation, RejectsAMarketOrderCarryingAPriceItWouldIgnore) {
+  const TickScale scale{kTick};
+  Order o = market_order();
+  o.limit_ticks = 116'000;
+  EXPECT_THROW(validate(o, scale), ReplayError);
+
+  o = market_order();
+  o.trigger_ticks = 116'000;
+  EXPECT_THROW(validate(o, scale), ReplayError);
+}
+
+TEST(OrderValidation, RejectsAPriceFieldLeftOverFromAnotherOrderType) {
+  const TickScale scale{kTick};
+  Order stop = market_order();
+  stop.type = OrderType::kStop;
+  stop.trigger_ticks = 116'000;
+  stop.limit_ticks = 115'999;
+  EXPECT_THROW(validate(stop, scale), ReplayError);
+
+  Order limit = market_order();
+  limit.type = OrderType::kLimit;
+  limit.limit_ticks = 116'000;
+  limit.trigger_ticks = 116'000;
+  EXPECT_THROW(validate(limit, scale), ReplayError);
+}
+
+TEST(OrderValidation, RejectsAnOrderWhoseTypeNeedsAPriceItNeverGot) {
+  const TickScale scale{kTick};
+  Order limit = market_order();
+  limit.type = OrderType::kLimit;
+  EXPECT_THROW(validate(limit, scale), ReplayError);
+
+  Order stop = market_order();
+  stop.type = OrderType::kStop;
+  EXPECT_THROW(validate(stop, scale), ReplayError);
+
+  Order stop_limit = market_order();
+  stop_limit.type = OrderType::kStopLimit;
+  EXPECT_THROW(validate(stop_limit, scale), ReplayError);
+}
+
 TEST(OrderNames, RenderEnumeratorsAsTheirSnakeCaseText) {
+  EXPECT_STREQ(order_type_name(OrderType::kMarket), "market");
+  EXPECT_STREQ(order_type_name(OrderType::kLimit), "limit");
+  EXPECT_STREQ(order_type_name(OrderType::kStop), "stop");
   EXPECT_STREQ(order_type_name(OrderType::kStopLimit), "stop_limit");
+
+  EXPECT_STREQ(order_status_name(OrderStatus::kPending), "pending");
+  EXPECT_STREQ(order_status_name(OrderStatus::kLive), "live");
+  EXPECT_STREQ(order_status_name(OrderStatus::kElected), "elected");
+  EXPECT_STREQ(order_status_name(OrderStatus::kFilled), "filled");
+  EXPECT_STREQ(order_status_name(OrderStatus::kCancelled), "cancelled");
   EXPECT_STREQ(order_status_name(OrderStatus::kOcoCancelled), "oco_cancelled");
+  EXPECT_STREQ(order_status_name(OrderStatus::kRejected), "rejected");
+
+  EXPECT_STREQ(fill_reason_name(FillReason::kMarket), "market");
+  EXPECT_STREQ(fill_reason_name(FillReason::kLimitThrough), "limit_through");
   EXPECT_STREQ(fill_reason_name(FillReason::kStopElected), "stop_elected");
+  EXPECT_STREQ(fill_reason_name(FillReason::kStopLimitThrough), "stop_limit_through");
+
+  EXPECT_STREQ(latency_class_name(LatencyClass::kOrderEntry), "order_entry");
   EXPECT_STREQ(latency_class_name(LatencyClass::kProtectionArm), "protection_arm");
 }
 

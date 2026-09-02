@@ -100,6 +100,7 @@ class RecordTradeSource final : public TradeSource {
 class TickSpanSource final : public TradeSource {
  public:
   explicit TickSpanSource(std::span<const Tick> ticks);
+  TickSpanSource(std::vector<Tick>&&) = delete;
   ~TickSpanSource() override;
 
   [[nodiscard]] const Tick* next() override;

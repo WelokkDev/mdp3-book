@@ -13,9 +13,16 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
 #include <type_traits>
 
 namespace bookreplay {
+
+/// The root of every exception this library throws.
+class BookreplayError : public std::runtime_error {
+ public:
+  using std::runtime_error::runtime_error;
+};
 
 inline constexpr std::int64_t kPriceScale = 1'000'000'000;
 inline constexpr std::int64_t kUndefPrice = std::numeric_limits<std::int64_t>::max();

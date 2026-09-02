@@ -24,31 +24,6 @@ namespace {
 
 using SharedTicks = std::shared_ptr<const std::vector<Tick>>;
 
-class SharedTickSource final : public TradeSource {
- public:
-  explicit SharedTickSource(SharedTicks ticks) : ticks_(std::move(ticks)) {}
-
-  [[nodiscard]] const Tick* next() override {
-    if (pos_ >= ticks_->size()) {
-      return nullptr;
-    }
-    const Tick* tick = &(*ticks_)[pos_++];
-    ++stats_.records;
-    ++stats_.ticks;
-    if (tick->aggressor == Side::kNone) {
-      ++stats_.no_aggressor;
-    }
-    return tick;
-  }
-
-  [[nodiscard]] const TradeSourceStats& stats() const noexcept override { return stats_; }
-
- private:
-  SharedTicks ticks_;
-  std::size_t pos_ = 0;
-  TradeSourceStats stats_{};
-};
-
 struct TickBuffer {
   SharedTicks ticks;
   TradeSourceStats stats;
@@ -70,32 +45,22 @@ TickBuffer load_ticks(const std::string& path, std::uint32_t instrument_id) {
 }
 
 TickBuffer buffer_from(const std::vector<Tick>& ticks) {
-  TradeSourceStats stats;
-  stats.records = ticks.size();
-  stats.ticks = ticks.size();
-  std::int64_t last_ts = kNotStarted;
-  for (const Tick& tick : ticks) {
-    if (tick.ts < 0 || tick.ts < last_ts) {
-      throw ReplayError("ticks must be non-negative and monotone in ts; record order is the queue");
-    }
-    last_ts = tick.ts;
-    if (tick.size == 0) {
-      throw ReplayError("a tick with zero size is not a print");
-    }
-    if (is_undef_price(tick.price)) {
-      throw ReplayError("a tick with an undefined price is not a print");
-    }
-    if (tick.aggressor == Side::kNone) {
-      ++stats.no_aggressor;
-    }
+  TickSpanSource source{ticks};
+  while (source.next() != nullptr) {
   }
-  return TickBuffer{std::make_shared<const std::vector<Tick>>(ticks), stats};
+  return TickBuffer{std::make_shared<const std::vector<Tick>>(ticks), source.stats()};
 }
 
 class PyReplay {
  public:
   PyReplay(std::unique_ptr<TradeSource> source, ReplayConfig config)
       : replay_(std::move(source), config) {}
+
+  PyReplay(const TickBuffer& buffer, ReplayConfig config)
+      : ticks_(buffer.ticks),
+        decoded_stats_(buffer.stats),
+        buffered_(true),
+        replay_(std::make_unique<TickSpanSource>(*buffer.ticks), config) {}
 
   void submit(const Order& order) {
     refuse_while_advancing();
@@ -148,9 +113,11 @@ class PyReplay {
     return replay_.stats();
   }
 
+  // A buffered replay reports the decode that produced the buffer, complete from
+  // construction; a streaming one reports what its source has read so far.
   [[nodiscard]] const TradeSourceStats& source_stats() const {
     refuse_while_advancing();
-    return replay_.source_stats();
+    return buffered_ ? decoded_stats_ : replay_.source_stats();
   }
 
  private:
@@ -161,6 +128,10 @@ class PyReplay {
     }
   }
 
+  // ticks_ must outlive replay_: the source it was built with holds a span into it.
+  SharedTicks ticks_;
+  TradeSourceStats decoded_stats_{};
+  bool buffered_ = false;
   Replay replay_;
   bool busy_ = false;
 };
@@ -168,8 +139,9 @@ class PyReplay {
 std::vector<NakedWindowResult> naked_window_scan(const TickBuffer& buffer,
                                                  const std::vector<NakedWindowQuery>& queries,
                                                  TickScale scale, std::size_t max_concurrent) {
+  const SharedTicks hold = buffer.ticks;
   py::gil_scoped_release unlock;
-  SharedTickSource source{buffer.ticks};
+  TickSpanSource source{*hold};
   NakedWindowScan scan{scale, max_concurrent};
   return scan.run(source, queries);
 }
@@ -179,8 +151,11 @@ std::vector<NakedWindowResult> naked_window_scan(const TickBuffer& buffer,
 PYBIND11_MODULE(bookreplay, m) {
   m.doc() = "Trade-print replay: submit, cancel, advance_to, fills.";
 
-  py::register_exception<DbnError>(m, "DbnError");
-  py::register_exception<ReplayError>(m, "ReplayError");
+  // pybind11 tries exception translators in reverse registration order, so the
+  // base must be registered first or its translator swallows both.
+  auto& base = py::register_exception<BookreplayError>(m, "BookreplayError");
+  py::register_exception<DbnError>(m, "DbnError", base);
+  py::register_exception<ReplayError>(m, "ReplayError", base);
 
   py::enum_<Side>(m, "Side")
       .value("BID", Side::kBid)
@@ -203,7 +178,8 @@ PYBIND11_MODULE(bookreplay, m) {
       .value("ELECTED", OrderStatus::kElected)
       .value("FILLED", OrderStatus::kFilled)
       .value("CANCELLED", OrderStatus::kCancelled)
-      .value("OCO_CANCELLED", OrderStatus::kOcoCancelled);
+      .value("OCO_CANCELLED", OrderStatus::kOcoCancelled)
+      .value("REJECTED", OrderStatus::kRejected);
 
   py::enum_<FillReason>(m, "FillReason")
       .value("MARKET", FillReason::kMarket)
@@ -330,7 +306,9 @@ PYBIND11_MODULE(bookreplay, m) {
       .def_readonly("ticks", &ReplayStats::ticks)
       .def_readonly("no_aggressor_ticks", &ReplayStats::no_aggressor_ticks)
       .def_readonly("no_aggressor_passive_skips", &ReplayStats::no_aggressor_passive_skips)
+      .def_readonly("tick_charged_qty", &ReplayStats::tick_charged_qty)
       .def_readonly("elections", &ReplayStats::elections)
+      .def_readonly("stop_entry_rejects", &ReplayStats::stop_entry_rejects)
       .def_readonly("fills", &ReplayStats::fills)
       .def_readonly("partial_fills", &ReplayStats::partial_fills)
       .def_readonly("oco_reductions", &ReplayStats::oco_reductions)
@@ -408,8 +386,7 @@ PYBIND11_MODULE(bookreplay, m) {
 
   py::class_<PyReplay>(m, "Replay")
       .def(py::init([](const TickBuffer& buffer, ReplayConfig config) {
-             return std::make_unique<PyReplay>(std::make_unique<SharedTickSource>(buffer.ticks),
-                                               config);
+             return std::make_unique<PyReplay>(buffer, config);
            }),
            py::arg("ticks"), py::arg("config"))
       .def_static(

@@ -42,6 +42,10 @@ void push_counted(std::vector<T>& v, const T& item, std::uint64_t& reallocations
   v.push_back(item);
 }
 
+[[nodiscard]] constexpr bool elects(Side ours, std::int64_t trigger, std::int64_t print) noexcept {
+  return ours == Side::kBid ? print >= trigger : print <= trigger;
+}
+
 void go_live(OrderState& s) {
   s.status = OrderStatus::kLive;
   switch (s.order.type) {
@@ -84,6 +88,8 @@ struct Replay::Impl {
   std::vector<Tick> ticks;
 
   Tick stash{};
+  std::int64_t last_print_price = 0;
+  bool have_last_print = false;
   bool stash_valid = false;
   bool exhausted = false;
   bool poisoned = false;
@@ -91,6 +97,14 @@ struct Replay::Impl {
   std::uint32_t instrument = 0;
   std::int64_t now = kNotStarted;
   std::uint64_t fill_seq = 0;
+
+  /// A decode failure ends the run, so no further work is accepted. Reading
+  /// back what did happen stays legal.
+  void refuse_when_poisoned() const {
+    if (poisoned) {
+      throw ReplayError("replay was poisoned by a decode failure and cannot advance");
+    }
+  }
 
   [[nodiscard]] std::size_t find_index(OrderId id) const {
     const auto it = std::lower_bound(
@@ -110,6 +124,7 @@ struct Replay::Impl {
   }
 
   void submit(const Order& o) {
+    refuse_when_poisoned();
     validate(o, config.scale);
     if (find_index(o.id) != kNoIndex) {
       throw ReplayError("an order with that id was already submitted");
@@ -131,7 +146,7 @@ struct Replay::Impl {
     }
     if (now != kNotStarted && s.effective_live_ns < now) {
       ++stats.late_arm_orders;
-      stats.late_arm_ns_total += now - s.effective_live_ns;
+      stats.late_arm_ns_total += static_cast<std::uint64_t>(now - s.effective_live_ns);
     }
 
     const auto idx = static_cast<std::uint32_t>(orders.size());
@@ -141,6 +156,7 @@ struct Replay::Impl {
   }
 
   void cancel_at(OrderId id, std::int64_t request_ts) {
+    refuse_when_poisoned();
     const std::size_t i = find_index(id);
     if (i == kNoIndex) {
       throw ReplayError("cancel names an order id that was never submitted");
@@ -179,6 +195,21 @@ struct Replay::Impl {
     }
     ++stats.no_aggressor_passive_skips;
     return false;
+  }
+
+  // Databento's Side on a trade is the aggressor's, so the other side aggressing
+  // means the print is the touch we are not crossing.
+  [[nodiscard]] std::int64_t aggressive_price(Side ours, const Tick& t, std::uint32_t q) {
+    if (t.aggressor != opposite(ours)) {
+      return t.price;
+    }
+    const std::int64_t level = config.scale.to_ticks(t.price);
+    if (!config.scale.representable(level)) {
+      throw ReplayError("print price is outside the representable tick range");
+    }
+    const std::int64_t charged = config.scale.to_price(ours == Side::kBid ? level + 1 : level - 1);
+    stats.tick_charged_qty += q;
+    return charged;
   }
 
   void emit_fill(std::uint32_t idx, const Tick& t, std::int64_t price, std::uint32_t q,
@@ -257,9 +288,7 @@ struct Replay::Impl {
     // CME stops are trade-elected: a quote at the trigger does not fire one,
     // and election is exchange-side, so no client latency follows it.
     if (uses_trigger(s.order.type) && !s.elected && s.effective_live_ns <= t.ts) {
-      const bool hit =
-          s.order.side == Side::kBid ? t.price >= s.trigger_price : t.price <= s.trigger_price;
-      if (hit) {
+      if (elects(s.order.side, s.trigger_price, t.price)) {
         s.elected = true;
         s.elected_ns = t.ts;
         s.status = OrderStatus::kElected;
@@ -279,9 +308,9 @@ struct Replay::Impl {
     std::uint32_t q = 0;
 
     if (s.mode == Mode::kAggressive && s.aggressive_from_ns <= t.ts) {
-      price = t.price;
-      reason = s.elected ? FillReason::kStopElected : FillReason::kMarket;
       q = fill_qty(s, t);
+      price = aggressive_price(s.order.side, t, q);
+      reason = s.elected ? FillReason::kStopElected : FillReason::kMarket;
     } else if (s.mode == Mode::kPassive && s.resting_from_ns < t.ts) {
       const bool through =
           s.order.side == Side::kBid ? t.price < s.limit_price : t.price > s.limit_price;
@@ -301,7 +330,21 @@ struct Replay::Impl {
   void apply_schedule(std::int64_t at) {
     for (const std::uint32_t idx : active) {
       OrderState& s = orders[idx];
-      if (s.status == OrderStatus::kPending && s.effective_live_ns <= at) {
+      if (s.status != OrderStatus::kPending || s.effective_live_ns > at) {
+        continue;
+      }
+      // Withdrawn before it could reach the venue, so the venue never sees it;
+      // the cancel loop below retires it.
+      if (s.effective_cancel_ns != kNever && s.effective_cancel_ns <= s.effective_live_ns) {
+        continue;
+      }
+      // CME refuses at order entry a buy stop whose trigger is not above the
+      // last trade price, and a sell stop whose trigger is not below it.
+      if (uses_trigger(s.order.type) && have_last_print &&
+          elects(s.order.side, s.trigger_price, last_print_price)) {
+        s.status = OrderStatus::kRejected;
+        ++stats.stop_entry_rejects;
+      } else {
         go_live(s);
       }
     }
@@ -343,12 +386,12 @@ struct Replay::Impl {
       match_one(idx, t);
     }
     compact();
+    last_print_price = t.price;
+    have_last_print = true;
   }
 
   std::span<const Fill> advance_to(std::int64_t target) {
-    if (poisoned) {
-      throw ReplayError("replay was poisoned by a decode failure and cannot advance");
-    }
+    refuse_when_poisoned();
     if (target < now) {
       throw ReplayError("advance_to is monotonic; an earlier instant is not a rewind");
     }
@@ -376,7 +419,12 @@ struct Replay::Impl {
       }
       const Tick t = stash;
       stash_valid = false;
-      process_tick(t);
+      try {
+        process_tick(t);
+      } catch (...) {
+        poisoned = true;
+        throw;
+      }
       if (config.retain_ticks) {
         push_counted(ticks, t, stats.reallocations);
       }

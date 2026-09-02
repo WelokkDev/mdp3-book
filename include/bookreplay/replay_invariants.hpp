@@ -104,26 +104,29 @@ class ReplayHarness {
 
   struct Options {
     std::size_t max_violations = 16;
+    /// Set alongside NoAggressorPolicy::kBothSides, which fills a resting order
+    /// on a print that names no aggressor at all.
+    bool allow_no_aggressor_passive_fills = false;
   };
 
   ReplayHarness(D& driver, Latency latency, Options opts = {})
       : driver_(&driver), latency_(latency), opts_(opts) {}
 
   void submit(const Order& order) {
+    driver_->submit(order);
     Tracked t;
     t.order = order;
     t.effective_live_ns = order.live_from_ns + latency_.for_class(order.latency);
     tracked_.push_back(t);
     ++report_.orders;
-    driver_->submit(order);
   }
 
   void cancel_at(OrderId id, std::int64_t request_ts_ns) {
+    driver_->cancel_at(id, request_ts_ns);
     if (Tracked* t = find(id)) {
       t->effective_cancel_ns =
           std::min(t->effective_cancel_ns, request_ts_ns + latency_.cancel_ns());
     }
-    driver_->cancel_at(id, request_ts_ns);
   }
 
   std::span<const Fill> advance_to(std::int64_t ts_ns) {
@@ -183,7 +186,8 @@ class ReplayHarness {
     }
 
     if (f.reason == FillReason::kLimitThrough || f.reason == FillReason::kStopLimitThrough) {
-      if (f.aggressor != opposite(f.side)) {
+      const bool allowed = opts_.allow_no_aggressor_passive_fills && f.aggressor == Side::kNone;
+      if (f.aggressor != opposite(f.side) && !allowed) {
         ++report_.attribution_violations;
         add(ReplayInvariant::kPassiveAttribution, "passive fill names no opposing aggressor", f);
       }

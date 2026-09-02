@@ -139,9 +139,15 @@ TEST(DbnVersionGate, AcceptsOnlyTheTestedVersion) {
 
 TEST(Naming, EveryActionAndSideHasAName) {
   EXPECT_STREQ(action_name(Action::kAdd), "Add");
+  EXPECT_STREQ(action_name(Action::kCancel), "Cancel");
+  EXPECT_STREQ(action_name(Action::kModify), "Modify");
+  EXPECT_STREQ(action_name(Action::kTrade), "Trade");
   EXPECT_STREQ(action_name(Action::kFill), "Fill");
+  EXPECT_STREQ(action_name(Action::kNone), "None");
   EXPECT_STREQ(action_name(Action::kClear), "Clear");
+
   EXPECT_STREQ(side_name(Side::kBid), "Bid");
+  EXPECT_STREQ(side_name(Side::kAsk), "Ask");
   EXPECT_STREQ(side_name(Side::kNone), "None");
 }
 

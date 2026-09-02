@@ -182,6 +182,25 @@ TEST(NoAggressorBothSides, FillsARestingLimitEarlyAndTripsPassiveAttribution) {
   EXPECT_EQ(harness.report().attribution_violations, k1);
 }
 
+TEST(NoAggressorBothSides, IsCheckableByTheHarnessWhenTheEngineIsConfiguredForIt) {
+  TradeStreamBuilder b;
+  b.auction(px(28999, 3), 5);
+
+  TradeSourceOptions opts;
+  opts.instrument_id = b.instrument_id();
+  ReplayConfig config{.latency = Latency{0, 0, 0}, .scale = TickScale{kTick}};
+  config.no_aggressor = NoAggressorPolicy::kBothSides;
+  Replay engine{std::make_unique<RecordTradeSource>(b.records(), opts), config};
+
+  ReplayHarness harness{engine, Latency{0, 0, 0}, {.allow_no_aggressor_passive_fills = true}};
+  Order resting = order_of(1, OrderType::kLimit, Side::kBid, 1);
+  resting.limit_ticks = tk(29000, 0);
+  harness.submit(resting);
+
+  EXPECT_EQ(harness.advance_to(kT0 + 10 * kMs).size(), std::size_t{1});
+  EXPECT_TRUE(harness.ok());
+}
+
 TEST(IgnoresEntryLatency, TripsCausalityByFillingBeforeTheOrderIsLive) {
   const Latency latency{kMs + kMs / 2, 0, 0};
   IgnoresEntryLatencyReplay driver{one_print(5), latency, TickScale{kTick}};
@@ -295,10 +314,18 @@ TEST(Differential, TheEngineAndTheToyOracleAgreeOnRandomStreamsAndScripts) {
       o.id = static_cast<OrderId>(i + 1);
       o.qty = 1 + static_cast<std::uint32_t>(rng() % 8);
       o.side = rng() % 2 == 0 ? Side::kBid : Side::kAsk;
-      o.live_from_ns = kT0 + static_cast<std::int64_t>(rng() % prints) * kMs;
+      const std::uint64_t live_index = rng() % prints;
+      o.live_from_ns = kT0 + static_cast<std::int64_t>(live_index) * kMs;
       o.latency = rng() % 2 == 0 ? LatencyClass::kOrderEntry : LatencyClass::kProtectionArm;
       o.oco_group = rng() % 3 == 0 ? 1 + static_cast<OcoGroup>(rng() % 2) : kNoOcoGroup;
       const std::int64_t near = tk(29000, 0) + static_cast<std::int64_t>(rng() % 9) - 4;
+      // A stop the market has already walked through is refused at order entry,
+      // so draw triggers from the level where the order arms rather than from
+      // where the walk started, or most rounds never elect one.
+      const std::int64_t at_arm = b.records()[live_index].price / kTick;
+      const std::int64_t trigger =
+          at_arm + (o.side == Side::kBid ? 1 + static_cast<std::int64_t>(rng() % 5)
+                                         : -1 - static_cast<std::int64_t>(rng() % 5));
       switch (rng() % 4) {
         case 0:
           o.type = OrderType::kMarket;
@@ -309,13 +336,13 @@ TEST(Differential, TheEngineAndTheToyOracleAgreeOnRandomStreamsAndScripts) {
           break;
         case 2:
           o.type = OrderType::kStop;
-          o.trigger_ticks = near;
+          o.trigger_ticks = trigger;
           break;
         default:
           o.type = OrderType::kStopLimit;
-          o.trigger_ticks = near;
-          o.limit_ticks = o.side == Side::kBid ? near + static_cast<std::int64_t>(rng() % 3)
-                                               : near - static_cast<std::int64_t>(rng() % 3);
+          o.trigger_ticks = trigger;
+          o.limit_ticks = o.side == Side::kBid ? trigger + static_cast<std::int64_t>(rng() % 3)
+                                               : trigger - static_cast<std::int64_t>(rng() % 3);
           break;
       }
       harness.submit(o);

@@ -8,16 +8,15 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace bookreplay {
 
 /// Thrown on any malformed input; a wrong file is never half-decoded.
-class DbnError : public std::runtime_error {
+class DbnError : public BookreplayError {
  public:
-  using std::runtime_error::runtime_error;
+  using BookreplayError::BookreplayError;
 };
 
 struct MappingInterval {

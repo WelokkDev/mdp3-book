@@ -58,6 +58,74 @@ TEST(NakedWindow, ReportsAStopReachedInsideTheWindowAndTheInstantItWasReached) {
   EXPECT_EQ(results[0].volume, std::uint64_t{9});
 }
 
+TEST(NakedWindow, NamesTheFirstPrintThroughTheStopWhenSeveralReachIt) {
+  TradeStreamBuilder b;
+  b.trade(Side::kAsk, px(29000, 0), 2);
+  b.trade(Side::kAsk, px(28999, 2), 3);
+  b.trade(Side::kAsk, px(28999, 0), 4);
+
+  const auto results = scan_over(b, {long_from(4 * kMs)});
+
+  ASSERT_EQ(results.size(), std::size_t{1});
+  EXPECT_TRUE(results[0].stop_reached);
+  EXPECT_EQ(results[0].first_reach_ts, kT0 + 2 * kMs);
+}
+
+TEST(NakedWindow, IgnoresAPrintFromBeforeThePositionExisted) {
+  NakedWindowAccumulator acc{TickScale{kTick}, long_from(5 * kMs)};
+
+  Tick early{};
+  early.ts = kT0 + kMs - 1;
+  early.price = px(28999, 0);
+  early.size = 5;
+  early.aggressor = Side::kAsk;
+  acc.observe(early);
+
+  EXPECT_EQ(acc.result().ticks, std::uint64_t{0});
+  EXPECT_FALSE(acc.result().stop_reached);
+}
+
+TEST(NakedWindow, ReleasesAClosedWindowsConcurrencySlot) {
+  TradeStreamBuilder b;
+  for (std::int64_t i = 1; i <= 4; ++i) {
+    b.at(kT0 + i * kMs).trade(Side::kAsk, px(29000, 0), 1);
+  }
+
+  std::vector<NakedWindowQuery> queries;
+  for (std::int64_t i = 1; i <= 4; ++i) {
+    NakedWindowQuery q = long_from(kMs);
+    q.entry_fill_ts = kT0 + i * kMs;
+    queries.push_back(q);
+  }
+
+  const auto results = scan_over(b, queries, 1);
+
+  ASSERT_EQ(results.size(), std::size_t{4});
+  for (const NakedWindowResult& r : results) {
+    EXPECT_EQ(r.ticks, std::uint64_t{1});
+  }
+}
+
+TEST(NakedWindow, RejectsAStopOnTheFavourableSideOfTheEntry) {
+  NakedWindowQuery too_high = long_from(kMs);
+  too_high.stop_price = px(29000, 1);
+  EXPECT_THROW((NakedWindowAccumulator{TickScale{kTick}, too_high}), ReplayError);
+
+  NakedWindowQuery too_low = long_from(kMs);
+  too_low.position_side = Side::kAsk;
+  too_low.stop_price = px(28999, 2);
+  EXPECT_THROW((NakedWindowAccumulator{TickScale{kTick}, too_low}), ReplayError);
+}
+
+TEST(NakedWindow, RejectsAnUnsetStopPriceOnEitherSide) {
+  for (const Side side : {Side::kBid, Side::kAsk}) {
+    NakedWindowQuery unset = long_from(kMs);
+    unset.position_side = side;
+    unset.stop_price = 0;
+    EXPECT_THROW((NakedWindowAccumulator{TickScale{kTick}, unset}), ReplayError);
+  }
+}
+
 TEST(NakedWindow, UsesTheSameAtOrThroughPredicateStopElectionUses) {
   NakedWindowQuery at_the_touch = long_from(3 * kMs);
   at_the_touch.stop_price = px(28999, 2);

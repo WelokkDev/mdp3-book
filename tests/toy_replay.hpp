@@ -61,6 +61,7 @@ class ToyReplayBase {
       process(ticks_[pos_]);
       ++pos_;
     }
+    arm(target);
     retire_cancelled(target);
     finish_advance();
     return {fills_.data(), fills_.size()};
@@ -104,6 +105,7 @@ class ToyReplayBase {
     std::int64_t from_ns = kNever;
     std::int64_t trigger_price = 0;
     std::int64_t limit_price = 0;
+    bool armed = false;
     bool elected = false;
   };
 
@@ -170,6 +172,37 @@ class ToyReplayBase {
   std::vector<Fill> fills_;
 
  private:
+  [[nodiscard]] std::int64_t aggressive_price(Side ours, const Tick& t) const {
+    if (t.aggressor != opposite(ours)) {
+      return t.price;
+    }
+    const std::int64_t ticks = scale_.to_ticks(t.price);
+    if (!scale_.representable(ticks)) {
+      throw ReplayError("print price is outside the representable tick range");
+    }
+    return scale_.to_price(ours == Side::kBid ? ticks + 1 : ticks - 1);
+  }
+
+  void arm(std::int64_t at) {
+    for (State& s : states_) {
+      if (s.armed || is_terminal(s.status) || s.live_ns > at) {
+        continue;
+      }
+      if (s.cancel_ns != kNever && s.cancel_ns <= s.live_ns) {
+        continue;
+      }
+      s.armed = true;
+      if (!uses_trigger(s.order.type) || !have_last_print_) {
+        continue;
+      }
+      const bool through = s.order.side == Side::kBid ? s.trigger_price <= last_print_
+                                                      : s.trigger_price >= last_print_;
+      if (through) {
+        s.status = OrderStatus::kRejected;
+      }
+    }
+  }
+
   void retire_cancelled(std::int64_t at) {
     for (State& s : states_) {
       if (!is_terminal(s.status) && s.cancel_ns != kNever && s.cancel_ns <= at) {
@@ -179,6 +212,7 @@ class ToyReplayBase {
   }
 
   void process(const Tick& t) {
+    arm(t.ts);
     retire_cancelled(t.ts);
     for (std::size_t i = 0; i < states_.size(); ++i) {
       State& s = states_[i];
@@ -199,7 +233,7 @@ class ToyReplayBase {
       std::int64_t price = 0;
       FillReason reason = FillReason::kMarket;
       if (s.mode == Mode::kAggressive && s.from_ns <= t.ts) {
-        price = t.price;
+        price = aggressive_price(s.order.side, t);
         reason = s.elected ? FillReason::kStopElected : FillReason::kMarket;
         q = fill_quantity(s.remaining, t.size);
       } else if (s.mode == Mode::kPassive && s.from_ns < t.ts &&
@@ -215,6 +249,8 @@ class ToyReplayBase {
         apply_oco(i, q);
       }
     }
+    last_print_ = t.price;
+    have_last_print_ = true;
   }
 
   void emit(std::size_t i, const Tick& t, std::int64_t price, std::uint32_t q, FillReason reason) {
@@ -248,6 +284,8 @@ class ToyReplayBase {
   TickScale scale_;
   std::size_t pos_ = 0;
   std::uint64_t seq_ = 0;
+  std::int64_t last_print_ = 0;
+  bool have_last_print_ = false;
 };
 
 class CancelOnFirstFillReplay : public ToyReplayBase {

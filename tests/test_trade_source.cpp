@@ -153,6 +153,24 @@ TEST(TradeSource, ThrowsOnASideByteOutsideTheDocumentedSet) {
   EXPECT_THROW((void)collect(source), ReplayError);
 }
 
+TEST(TradeSource, ThrowsOnACorruptSideByteOnAnInstrumentTheFilterExcludes) {
+  TradeStreamBuilder b;
+  b.instrument(999).trade(Side::kBid, px(29000, 0), 1).corrupt_side('Z');
+
+  TradeSourceOptions opts;
+  opts.instrument_id = 42004177;
+  RecordTradeSource source{b.records(), opts};
+  EXPECT_THROW((void)collect(source), ReplayError);
+}
+
+TEST(TradeSource, ThrowsOnACorruptSideByteOnARecordThatIsNotAPrint) {
+  TradeStreamBuilder b;
+  b.trade(Side::kBid, px(29000, 0), 1).corrupt_action('A').corrupt_side('Z');
+
+  RecordTradeSource source{as_mbo_trades(b)};
+  EXPECT_THROW((void)collect(source), ReplayError);
+}
+
 TEST(TradeSource, ReturnsNullptrAtACleanEndOfStream) {
   RecordTradeSource source{two_prints().records()};
   EXPECT_NE(source.next(), nullptr);
@@ -199,6 +217,50 @@ TEST(DbnSource, AcceptsTradesMboAndMixedSchemaMetadata) {
   }
 }
 
+TEST(DbnSource, DecodesAMixedStreamAndCountsTheRecordsThatAreNotPrints) {
+  const TradeStreamBuilder b = two_prints();
+  const std::vector<std::byte> bytes = testing::DbnEncoder{}
+                                           .schema(std::nullopt)
+                                           .add(b.records()[0])
+                                           .add(StatusMsg{})
+                                           .add(as_mbo_trades(b)[1])
+                                           .encode();
+
+  DbnTradeSource source{bytes.data(), bytes.size()};
+  const std::vector<Tick> ticks = collect(source);
+
+  ASSERT_EQ(ticks.size(), std::size_t{2});
+  EXPECT_EQ(ticks[0].price, px(29000, 1));
+  EXPECT_EQ(ticks[0].size, 3U);
+  EXPECT_EQ(ticks[0].aggressor, Side::kBid);
+  EXPECT_EQ(ticks[0].ts_event, ticks[0].ts - testing::kTsInDelta);
+  EXPECT_EQ(ticks[1].price, px(29000, 0));
+  EXPECT_EQ(ticks[1].size, 5U);
+  EXPECT_EQ(ticks[1].aggressor, Side::kAsk);
+
+  const TradeSourceStats& s = source.stats();
+  EXPECT_EQ(s.records, std::uint64_t{3});
+  EXPECT_EQ(s.ticks, std::uint64_t{2});
+  EXPECT_EQ(s.skipped_non_trade, std::uint64_t{1});
+  EXPECT_TRUE(s.reconciles());
+}
+
+TEST(DbnSource, ThrowsOnABackwardTimestampInADecodedStream) {
+  TradeStreamBuilder b;
+  b.at(2'000'000'000).trade(Side::kBid, px(29000, 0), 1);
+  b.at(1'000'000'000).trade(Side::kBid, px(29000, 0), 1);
+
+  testing::DbnEncoder encoder;
+  encoder.schema(std::uint16_t{4});
+  for (const TradeMsg& record : b.records()) {
+    encoder.add(record);
+  }
+  const std::vector<std::byte> bytes = encoder.encode();
+
+  DbnTradeSource source{bytes.data(), bytes.size()};
+  EXPECT_THROW((void)collect(source), ReplayError);
+}
+
 TEST(TickSpanSource, ThrowsOnABackwardTimestampRatherThanReplayingAReorderedBuffer) {
   Tick late{};
   late.ts = 2'000'000'000;
@@ -211,6 +273,41 @@ TEST(TickSpanSource, ThrowsOnABackwardTimestampRatherThanReplayingAReorderedBuff
   const std::vector<Tick> day{late, early};
   TickSpanSource source{day};
   EXPECT_NE(source.next(), nullptr);
+  EXPECT_THROW((void)source.next(), ReplayError);
+}
+
+TEST(TickSpanSource, RefusesATickWithAnUndefinedPrice) {
+  Tick tick{};
+  tick.ts = 1'000'000'000;
+  tick.price = kUndefPrice;
+  tick.size = 5;
+  tick.aggressor = Side::kBid;
+
+  const std::vector<Tick> day{tick};
+  TickSpanSource source{day};
+  EXPECT_THROW((void)source.next(), ReplayError);
+}
+
+TEST(TickSpanSource, RefusesAZeroSizeTick) {
+  Tick tick{};
+  tick.ts = 1'000'000'000;
+  tick.price = px(29000, 0);
+  tick.aggressor = Side::kBid;
+
+  const std::vector<Tick> day{tick};
+  TickSpanSource source{day};
+  EXPECT_THROW((void)source.next(), ReplayError);
+}
+
+TEST(TickSpanSource, RefusesANegativeTickTimestamp) {
+  Tick tick{};
+  tick.ts = -1;
+  tick.price = px(29000, 0);
+  tick.size = 5;
+  tick.aggressor = Side::kBid;
+
+  const std::vector<Tick> day{tick};
+  TickSpanSource source{day};
   EXPECT_THROW((void)source.next(), ReplayError);
 }
 

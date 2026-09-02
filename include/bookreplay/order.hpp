@@ -5,13 +5,12 @@
 
 #include <cstdint>
 #include <limits>
-#include <stdexcept>
 
 namespace bookreplay {
 
-class ReplayError : public std::runtime_error {
+class ReplayError : public BookreplayError {
  public:
-  using std::runtime_error::runtime_error;
+  using BookreplayError::BookreplayError;
 };
 
 using OrderId = std::uint64_t;
@@ -40,6 +39,7 @@ enum class OrderStatus : std::uint8_t {
   kFilled,
   kCancelled,
   kOcoCancelled,
+  kRejected,
 };
 
 enum class FillReason : std::uint8_t {
@@ -186,9 +186,11 @@ struct OrderView {
 
 [[nodiscard]] constexpr bool is_terminal(OrderStatus s) noexcept {
   return s == OrderStatus::kFilled || s == OrderStatus::kCancelled ||
-         s == OrderStatus::kOcoCancelled;
+         s == OrderStatus::kOcoCancelled || s == OrderStatus::kRejected;
 }
 
+/// Throws unless every price field the type uses is set and every one it
+/// ignores is 0. Tick level 0 is therefore not an expressible price.
 void validate(const Order& order, const TickScale& scale);
 
 [[nodiscard]] const char* order_type_name(OrderType t) noexcept;

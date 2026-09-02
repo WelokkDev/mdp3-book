@@ -4,6 +4,7 @@
 #include "bookreplay/trade_source.hpp"
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <type_traits>
 #include <vector>
@@ -22,6 +23,8 @@ using testing::px;
 using testing::TradeStreamBuilder;
 
 static_assert(!std::is_default_constructible_v<ReplayConfig>);
+static_assert(std::is_base_of_v<BookreplayError, DbnError>);
+static_assert(std::is_base_of_v<BookreplayError, ReplayError>);
 
 constexpr std::int64_t kT0 = 1'785'888'000'000'000'000LL;
 constexpr std::int64_t kMs = 1'000'000LL;
@@ -158,7 +161,7 @@ TEST(MarketOrder, FillsAtTheFirstPrintAtOrAfterItBecomesLive) {
   EXPECT_EQ(fills[0].reason, FillReason::kMarket);
 }
 
-TEST(MarketOrder, FillsAtThePrintPriceWithNoHalfSpreadAdjustment) {
+TEST(MarketOrder, TakesThePrintPriceWhenThatPrintWasAggressedOnItsOwnSide) {
   auto r = replay_over(rising(), cfg());
   r->submit(market(1, Side::kBid, 1, kT0));
 
@@ -166,6 +169,64 @@ TEST(MarketOrder, FillsAtThePrintPriceWithNoHalfSpreadAdjustment) {
   ASSERT_EQ(fills.size(), std::size_t{1});
   EXPECT_EQ(fills[0].price, px(29000, 1));
   EXPECT_EQ(fills[0].price_ticks, tk(29000, 1));
+  EXPECT_EQ(r->stats().tick_charged_qty, std::uint64_t{0});
+}
+
+TEST(MarketOrder, PaysOneTickThroughAPrintTheOtherSideAggressed) {
+  TradeStreamBuilder b;
+  b.trade(Side::kAsk, px(29000, 0), 5);
+
+  auto r = replay_over(b, cfg());
+  r->submit(market(1, Side::kBid, 1, kT0));
+
+  const std::span<const Fill> fills = r->advance_to(kT0 + 10 * kMs);
+  ASSERT_EQ(fills.size(), std::size_t{1});
+  EXPECT_EQ(fills[0].price, px(29000, 1));
+  EXPECT_EQ(fills[0].price_ticks, tk(29000, 1));
+  EXPECT_EQ(r->stats().tick_charged_qty, std::uint64_t{1});
+}
+
+TEST(MarketOrder, ASellPaysThatTickTheOtherWay) {
+  TradeStreamBuilder b;
+  b.trade(Side::kBid, px(29000, 0), 5);
+
+  auto r = replay_over(b, cfg());
+  r->submit(market(1, Side::kAsk, 1, kT0));
+
+  const std::span<const Fill> fills = r->advance_to(kT0 + 10 * kMs);
+  ASSERT_EQ(fills.size(), std::size_t{1});
+  EXPECT_EQ(fills[0].price, px(28999, 3));
+  EXPECT_EQ(r->stats().tick_charged_qty, std::uint64_t{1});
+}
+
+TEST(MarketOrder, TakesAnAuctionPrintAtItsClearingPriceBecauseThereIsNoSpreadToCross) {
+  TradeStreamBuilder b;
+  b.auction(px(29000, 0), 5);
+
+  auto r = replay_over(b, cfg());
+  r->submit(market(1, Side::kBid, 1, kT0));
+
+  const std::span<const Fill> fills = r->advance_to(kT0 + 10 * kMs);
+  ASSERT_EQ(fills.size(), std::size_t{1});
+  EXPECT_EQ(fills[0].price, px(29000, 0));
+  EXPECT_EQ(r->stats().tick_charged_qty, std::uint64_t{0});
+}
+
+TEST(MarketOrder, ChargesTheTickOnEveryPrintOfAPartialFillSequence) {
+  TradeStreamBuilder b;
+  b.trade(Side::kAsk, px(29000, 0), 3);
+  b.trade(Side::kAsk, px(28999, 3), 3);
+  b.trade(Side::kAsk, px(28999, 2), 3);
+
+  auto r = replay_over(b, cfg());
+  r->submit(market(1, Side::kBid, 9, kT0));
+
+  const std::span<const Fill> fills = r->advance_to(kT0 + 10 * kMs);
+  ASSERT_EQ(fills.size(), std::size_t{3});
+  EXPECT_EQ(fills[0].price, px(29000, 1));
+  EXPECT_EQ(fills[1].price, px(29000, 0));
+  EXPECT_EQ(fills[2].price, px(28999, 3));
+  EXPECT_EQ(r->stats().tick_charged_qty, std::uint64_t{9});
 }
 
 TEST(MarketOrder, DoesNotFillOnThePrintThatPrecedesItsEntryLatency) {
@@ -246,6 +307,7 @@ TEST(RestingLimit, IgnoresAPrintWhoseAggressorIsOnItsOwnSide) {
   r->submit(limit(1, Side::kBid, tk(29000, 0), 1, kT0));
 
   EXPECT_TRUE(r->advance_to(kT0 + 10 * kMs).empty());
+  EXPECT_EQ(r->stats().no_aggressor_passive_skips, std::uint64_t{0});
 }
 
 TEST(RestingLimit, IgnoresAPrintWithNoAggressorUnderTheDefaultPolicy) {
@@ -356,13 +418,124 @@ TEST(Stop, FillsAtTheElectingPrintPriceWithNoAdditionalClientLatency) {
   EXPECT_EQ(fills[0].ts_ns, r->order(1).elected_ns);
 }
 
+TEST(Stop, AnElectingPrintFromTheOtherSideCostsTheSameTickAsAMarketOrder) {
+  TradeStreamBuilder b;
+  b.trade(Side::kBid, px(29000, 1), 5);
+
+  auto r = replay_over(b, cfg());
+  r->submit(stop(1, Side::kAsk, tk(29000, 1), 1, kT0));
+
+  const std::span<const Fill> fills = r->advance_to(kT0 + 10 * kMs);
+  ASSERT_EQ(fills.size(), std::size_t{1});
+  EXPECT_EQ(fills[0].reason, FillReason::kStopElected);
+  EXPECT_EQ(fills[0].price, px(29000, 0));
+  EXPECT_EQ(r->stats().tick_charged_qty, std::uint64_t{1});
+}
+
 TEST(Stop, DoesNotElectBeforeItsOwnEntryLatencyHasElapsed) {
-  auto r = replay_over(rising(), cfg(kMs + kMs / 2));
+  TradeStreamBuilder b;
+  b.trade(Side::kBid, px(29000, 2), 5);
+  b.trade(Side::kAsk, px(29000, 0), 5);
+  b.trade(Side::kBid, px(29000, 1), 5);
+
+  auto r = replay_over(b, cfg(2 * kMs + kMs / 2));
   r->submit(stop(1, Side::kBid, tk(29000, 1), 1, kT0));
 
   const std::span<const Fill> fills = r->advance_to(kT0 + 10 * kMs);
   ASSERT_EQ(fills.size(), std::size_t{1});
-  EXPECT_EQ(fills[0].ts_ns, kT0 + 2 * kMs);
+  EXPECT_EQ(fills[0].ts_ns, kT0 + 3 * kMs);
+}
+
+TEST(Stop, WhoseTriggerIsThroughTheMarketOnArrivalIsRejectedByTheVenue) {
+  auto r = replay_over(rising(), cfg(kMs + kMs / 2));
+  r->submit(stop(1, Side::kAsk, tk(29010, 0), 1, kT0));
+
+  EXPECT_TRUE(r->advance_to(kT0 + 10 * kMs).empty());
+  EXPECT_EQ(r->order(1).status, OrderStatus::kRejected);
+  EXPECT_EQ(r->stats().stop_entry_rejects, std::uint64_t{1});
+  EXPECT_EQ(r->stats().elections, std::uint64_t{0});
+}
+
+TEST(Stop, IsJudgedOnTheMarketAtItsArrivalAndNotAtItsSubmission) {
+  auto r = replay_over(rising(), cfg(2 * kMs + kMs / 2));
+  r->submit(stop(1, Side::kBid, tk(29000, 1), 1, kT0));
+
+  EXPECT_TRUE(r->advance_to(kT0 + 10 * kMs).empty());
+  EXPECT_EQ(r->order(1).status, OrderStatus::kRejected);
+}
+
+TEST(Stop, WhoseTriggerEqualsTheLastPrintIsRejectedBecauseCmeRequiresStrictlyBeyond) {
+  auto r = replay_over(rising(), cfg(kMs + kMs / 2));
+  r->submit(stop(1, Side::kBid, tk(29000, 1), 1, kT0));
+
+  EXPECT_TRUE(r->advance_to(kT0 + 10 * kMs).empty());
+  EXPECT_EQ(r->order(1).status, OrderStatus::kRejected);
+}
+
+TEST(Stop, SubmittedBeforeTheFirstPrintIsAcceptedBecauseNoLastTradePriceExistsYet) {
+  auto r = replay_over(rising(), cfg());
+  r->submit(stop(1, Side::kBid, tk(29000, 1), 1, kT0));
+
+  const std::span<const Fill> fills = r->advance_to(kT0 + 10 * kMs);
+  ASSERT_EQ(fills.size(), std::size_t{1});
+  EXPECT_EQ(r->stats().stop_entry_rejects, std::uint64_t{0});
+}
+
+TEST(Stop, IsJudgedOnTheSameMarketWhicheverWayTheCallerStepsAdvanceTo) {
+  auto whole = replay_over(rising(), cfg(kMs + kMs / 2));
+  whole->submit(stop(1, Side::kBid, tk(29000, 1), 1, kT0));
+  (void)whole->advance_to(kT0 + 10 * kMs);
+
+  auto stepped = replay_over(rising(), cfg(kMs + kMs / 2));
+  stepped->submit(stop(1, Side::kBid, tk(29000, 1), 1, kT0));
+  (void)stepped->advance_to(kT0 + kMs + kMs / 4);
+  (void)stepped->advance_to(kT0 + 10 * kMs);
+
+  EXPECT_EQ(whole->order(1).status, stepped->order(1).status);
+  EXPECT_EQ(whole->stats().stop_entry_rejects, stepped->stats().stop_entry_rejects);
+}
+
+TEST(Stop, WithdrawnBeforeItReachesTheVenueIsCancelledRatherThanRejected) {
+  TradeStreamBuilder b;
+  b.trade(Side::kBid, px(29000, 1), 5);
+  b.at(kT0 + 10 * kMs).trade(Side::kBid, px(29000, 1), 5);
+
+  const auto run = [&b](bool stepped) {
+    auto r = replay_over(b, cfg(0, 5 * kMs, kMs));
+    Order leg = stop(1, Side::kAsk, tk(29000, 2), 1, kT0 + kMs);
+    leg.latency = LatencyClass::kProtectionArm;
+    r->submit(leg);
+    r->cancel_at(1, kT0 + kMs);
+    if (stepped) {
+      (void)r->advance_to(kT0 + 2 * kMs);
+    }
+    (void)r->advance_to(kNever);
+    return r;
+  };
+
+  auto one_shot = run(false);
+  auto stepped = run(true);
+
+  EXPECT_EQ(one_shot->order(1).status, OrderStatus::kCancelled);
+  EXPECT_EQ(stepped->order(1).status, one_shot->order(1).status);
+  EXPECT_EQ(one_shot->stats().cancels_applied, std::uint64_t{1});
+  EXPECT_EQ(one_shot->stats().stop_entry_rejects, std::uint64_t{0});
+}
+
+TEST(MarketOrder, RefusesAPrintPriceThatHasNoRoomLeftOnTheTickGrid) {
+  Tick tick{};
+  tick.ts = kT0 + kMs;
+  tick.price = std::numeric_limits<std::int64_t>::min();
+  tick.size = 5;
+  tick.aggressor = Side::kBid;
+  const std::vector<Tick> day{tick};
+
+  Replay r{std::make_unique<TickSpanSource>(day),
+           ReplayConfig{.latency = Latency{0, 0, 0}, .scale = TickScale{1}}};
+  r.submit(market(1, Side::kAsk, 1, kT0));
+
+  EXPECT_THROW((void)r.advance_to(kT0 + 10 * kMs), ReplayError);
+  EXPECT_THROW((void)r.advance_to(kT0 + 20 * kMs), ReplayError);
 }
 
 TEST(StopLimit, BecomesARestingLimitAndCannotFillOnTheElectingPrint) {
@@ -410,7 +583,7 @@ TEST(Latency, ALegArmedBehindTheCursorIsAcceptedAndCountedNotRejected) {
 
   EXPECT_NO_THROW(r->submit(market(1, Side::kBid, 1, kT0)));
   EXPECT_EQ(r->stats().late_arm_orders, std::uint64_t{1});
-  EXPECT_EQ(r->stats().late_arm_ns_total, 2 * kMs);
+  EXPECT_EQ(r->stats().late_arm_ns_total, std::uint64_t{2 * kMs});
 }
 
 TEST(Latency, TheSameScriptUnderTwoEntryLatenciesFillsOnDifferentPrints) {
@@ -622,6 +795,20 @@ TEST(Instrument, APrintFromASecondInstrumentPoisonsTheReplayRatherThanFillingAny
 
   EXPECT_THROW((void)r.advance_to(kT0 + 10 * kMs), ReplayError);
   EXPECT_THROW((void)r.advance_to(kT0 + 20 * kMs), ReplayError);
+}
+
+TEST(Instrument, APoisonedReplayRefusesNewWorkButStillReportsWhatHappened) {
+  TradeStreamBuilder b;
+  b.trade(Side::kBid, px(29000, 0), 5);
+  b.instrument(999).trade(Side::kBid, px(1, 0), 5);
+
+  auto r = std::make_unique<Replay>(std::make_unique<RecordTradeSource>(b.records()), cfg());
+  r->submit(market(1, Side::kBid, 1, kT0));
+  EXPECT_THROW((void)r->advance_to(kT0 + 10 * kMs), ReplayError);
+
+  EXPECT_THROW(r->submit(market(2, Side::kBid, 1, kT0)), ReplayError);
+  EXPECT_THROW(r->cancel(1), ReplayError);
+  EXPECT_EQ(r->order(1).filled, 1U);
 }
 
 TEST(Ties, TwoPrintsAtOneNanosecondAreProcessedInStreamOrderAndNeverSorted) {
