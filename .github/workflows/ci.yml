@@ -26,6 +26,10 @@ jobs:
             os: ubuntu-latest
             cc: clang
             cxx: clang++
+          - name: macos-clang
+            os: macos-latest
+            cc: clang
+            cxx: clang++
           - name: windows-msvc
             os: windows-latest
 
