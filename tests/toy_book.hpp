@@ -101,6 +101,10 @@ class ToyBook : public ToyBookBase {
     switch (action_of(rec)) {
       case Action::kAdd:
         bump();
+        // An id still resting is replaced, as Book replaces it; inserting over
+        // it would leave the old size orphaned in its level for good. The
+        // broken books below keep the orphaning: it is not the axis they test.
+        erase_order(rec);
         insert_order(rec);
         return;
       case Action::kCancel:

@@ -3,8 +3,9 @@
 CME MDP 3.0 limit order book reconstruction from Databento DBN, checked against
 an independent vendor snapshot.
 
-**Work in progress.** The decoder, the invariant harness and a trades-only
-replay driver are built and tested. The book itself does not exist yet.
+**Work in progress.** The decoder, the invariant harness, a trades-only
+replay driver and a reference order-by-order book are built and tested. The
+book has not yet been diffed against `mbp-10`, and nothing fills against it.
 
 ## Why
 
@@ -79,8 +80,30 @@ instead of quoting one number. `NakedWindowScan` measures the window between an
 entry filling and its stop reaching the exchange: whether a print reached the
 stop first, when, and the worst excursion in ticks.
 
-Book invariants are already written and tested against deliberately broken books
-in `tests/toy_book.hpp`, ahead of the book itself.
+## Book
+
+`Book` rebuilds every instrument in the stream order by order: a FIFO queue per
+price level, the resting order behind every id, and `queue_ahead`, the quantity
+a fill has to consume before it reaches a given order. FIFO is what NQ outrights
+use (`match_algorithm` 'F'); a pro-rata product has no single queue position,
+and the book does not check which it was handed.
+
+The hard part is what a modify does to priority. A price change or a size
+increase queues at the tail, and a size that shrinks or holds keeps its place.
+An iceberg refreshing its displayed tranche breaks that, because it looks
+identical in aggregate to a shrink and still queues at the tail. The fill in
+front of the M separates the two: after an F, the M keeps priority only if its
+size is exactly what the fill left behind. A level total is the same either way, so no aggregate view
+can falsify that rule and the `mbp-10` diff will not settle it. Only fill
+ordering can.
+
+This is the reference implementation, with obvious containers and no attempt
+at speed, meant to survive the fast book as the oracle that one is
+differentially tested against. So it never repairs itself quietly: `verify()`
+recomputes every level total from its queue and throws on any disagreement,
+and the tests run it after every record. Invariants were written and tested against deliberately
+broken books in `tests/toy_book.hpp` before the book existed; `Book` now runs
+the same harness unchanged.
 
 ## Build
 
@@ -128,9 +151,9 @@ differ semantically and must not be mixed; record the pull date in the path. And
 billing is on *uncompressed* bytes: MBO is 56 B per record, so cost is the record
 count times 56 B no matter how small the `.zst` turns out to be.
 
-Once the book exists, verification will come from SHA-256 digests of book state
-at every event boundary, so anyone holding the same pull can check the
-reconstruction without the data itself being shared.
+Verification will come from SHA-256 digests of book state at every event
+boundary, so anyone holding the same pull can check the reconstruction without
+the data itself being shared. Those digests are not published yet.
 
 `tests/data` is the one apparent exception: about 5 KB of Databento's own test
 vectors, Apache-2.0 and vendored unmodified so the decoder tests are hermetic.

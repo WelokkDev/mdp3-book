@@ -51,8 +51,8 @@ class StreamBuilder {
     return *this;
   }
 
-  /// Aggressor print. `side` is the AGGRESSOR side — Bid for a buy lifting
-  /// the offer (Databento MBO) — and it carries no resting order_id.
+  /// Aggressor print. `side` is the AGGRESSOR side in Databento MBO: Bid for
+  /// a buy lifting the offer. It carries no resting order_id.
   StreamBuilder& trade(Side side, std::int64_t price, std::uint32_t size) {
     push('T', side, 0, price, size);
     return *this;
@@ -90,6 +90,13 @@ class StreamBuilder {
   /// Deliberately corrupt the most recent record, for the well-formedness check.
   StreamBuilder& corrupt_action(char c) {
     records_.back().action = c;
+    return *this;
+  }
+
+  /// Switch the stream to another instrument, keeping one sequence across
+  /// both, as a real file has.
+  StreamBuilder& instrument(std::uint32_t instrument_id) {
+    instrument_id_ = instrument_id;
     return *this;
   }
 
@@ -158,7 +165,7 @@ inline std::vector<MboMsg> iceberg_then_market_moves_up() {
 }
 
 /// A clean event: aggressor print, per-order attribution, and the size
-/// reduction arriving as its own Cancel — which is where every reduction
+/// reduction arriving as its own Cancel. That is where every reduction
 /// actually comes from.
 inline std::vector<MboMsg> clean_trade_event() {
   StreamBuilder b = opening_snapshot();

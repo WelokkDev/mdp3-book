@@ -1,3 +1,4 @@
+#include "bookreplay/book.hpp"
 #include "bookreplay/dbn.hpp"
 #include "bookreplay/invariants.hpp"
 
@@ -20,6 +21,7 @@ using testing::StreamBuilder;
 using testing::ToyBook;
 using testing::TradeMutatesBook;
 
+static_assert(BookLike<Book>);
 static_assert(BookLike<ToyBook>);
 static_assert(BookLike<FillAsDeltaBook>);
 static_assert(BookLike<FillAsDeleteBook>);
@@ -29,8 +31,8 @@ static_assert(BookLike<TradeMutatesBook>);
 constexpr std::uint64_t k0 = 0;
 constexpr std::uint64_t k1 = 1;
 
-TEST(CorrectBook, CleanTradeEventSatisfiesEveryInvariant) {
-  ToyBook book;
+template <BookLike B>
+void expect_clean_trade_event_is_clean(B& book) {
   const auto report = run_checked(book, testing::clean_trade_event(), SessionState::kTrading);
 
   EXPECT_TRUE(report.ok());
@@ -47,8 +49,8 @@ TEST(CorrectBook, CleanTradeEventSatisfiesEveryInvariant) {
   EXPECT_EQ(report.unknown_order_fills, k0);
 }
 
-TEST(CorrectBook, IcebergFillIsCountedAsDataNotFailure) {
-  ToyBook book;
+template <BookLike B>
+void expect_iceberg_fill_is_data(B& book) {
   const auto report =
       run_checked(book, testing::iceberg_then_market_moves_up(), SessionState::kTrading);
 
@@ -57,6 +59,32 @@ TEST(CorrectBook, IcebergFillIsCountedAsDataNotFailure) {
   EXPECT_EQ(report.materializations, k0);
   EXPECT_EQ(report.mutating_records, std::uint64_t{9});
   EXPECT_EQ(report.observed_mutations, std::uint64_t{9});
+}
+
+TEST(CorrectBook, CleanTradeEventSatisfiesEveryInvariant) {
+  ToyBook book;
+  expect_clean_trade_event_is_clean(book);
+}
+
+TEST(CorrectBook, IcebergFillIsCountedAsDataNotFailure) {
+  ToyBook book;
+  expect_iceberg_fill_is_data(book);
+}
+
+// The same two fixtures, driven through the real book. ToyBook proves the
+// harness; Book is what the harness exists for, and `run_checked` takes it
+// with no change of its own.
+
+TEST(CorrectBook, RealBookSatisfiesEveryInvariantOnTheCleanTradeEvent) {
+  Book book;
+  expect_clean_trade_event_is_clean(book);
+  EXPECT_NO_THROW(book.verify());
+}
+
+TEST(CorrectBook, RealBookCountsTheIcebergFillAsDataNotFailure) {
+  Book book;
+  expect_iceberg_fill_is_data(book);
+  EXPECT_NO_THROW(book.verify());
 }
 
 TEST(FillAsDelta, TripsMutationReconciliation) {

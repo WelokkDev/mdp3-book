@@ -12,6 +12,7 @@ set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
 add_executable(bookreplay_tests
+  test_book.cpp
   test_dbn_layout.cpp
   test_dbn_reader.cpp
   test_dbn_roundtrip.cpp

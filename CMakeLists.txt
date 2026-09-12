@@ -39,6 +39,7 @@ include(CompilerWarnings)
 include(Zstd)
 
 add_library(bookreplay
+  src/book.cpp
   src/dbn.cpp
   src/dbn_reader.cpp
   src/order.cpp
