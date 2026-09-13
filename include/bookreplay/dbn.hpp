@@ -215,9 +215,20 @@ static_assert(offsetof(StatusMsg, is_trading) == 30);
 static_assert(offsetof(StatusMsg, is_quoting) == 31);
 static_assert(offsetof(StatusMsg, is_short_sell_restricted) == 32);
 
+inline constexpr std::uint16_t kStatusActionPreOpen = 1;
+inline constexpr std::uint16_t kStatusActionPreCross = 2;
+inline constexpr std::uint16_t kStatusActionQuoting = 3;
+inline constexpr std::uint16_t kStatusActionCross = 4;
+inline constexpr std::uint16_t kStatusActionRotation = 5;
+inline constexpr std::uint16_t kStatusActionNewPriceIndication = 6;
 inline constexpr std::uint16_t kStatusActionTrading = 7;
 inline constexpr std::uint16_t kStatusActionHalt = 8;
 inline constexpr std::uint16_t kStatusActionPause = 9;
+inline constexpr std::uint16_t kStatusActionSuspend = 10;
+inline constexpr std::uint16_t kStatusActionPreClose = 11;
+inline constexpr std::uint16_t kStatusActionClose = 12;
+inline constexpr std::uint16_t kStatusActionPostClose = 13;
+inline constexpr std::uint16_t kStatusActionNotAvailableForTrading = 15;
 
 inline constexpr char kTriStateYes = 'Y';
 inline constexpr char kTriStateNo = 'N';

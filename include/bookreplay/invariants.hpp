@@ -7,6 +7,7 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 namespace bookreplay {
@@ -18,6 +19,36 @@ enum class SessionState : std::uint8_t {
   kHalted,
   kClosed,
 };
+
+/// The venue reports a mid-session halt as a pre-open carrying a market-event
+/// reason rather than as a halt action: NQ did exactly that on 2026-08-25 at
+/// 14:30:27 UTC. So `is_trading` decides, and the action only names which
+/// non-trading state it was.
+[[nodiscard]] constexpr SessionState session_state_of(const StatusMsg& status) noexcept {
+  if (status.is_trading == kTriStateYes) {
+    return SessionState::kTrading;
+  }
+  switch (status.action) {
+    case kStatusActionPreOpen:
+    case kStatusActionPreCross:
+    case kStatusActionQuoting:
+    case kStatusActionCross:
+    case kStatusActionRotation:
+    case kStatusActionNewPriceIndication:
+      return SessionState::kPreOpen;
+    case kStatusActionHalt:
+    case kStatusActionPause:
+    case kStatusActionSuspend:
+      return SessionState::kHalted;
+    case kStatusActionPreClose:
+    case kStatusActionClose:
+    case kStatusActionPostClose:
+    case kStatusActionNotAvailableForTrading:
+      return SessionState::kClosed;
+    default:
+      return SessionState::kUnknown;
+  }
+}
 
 /// `mutation_count()` counts applied records, not orders touched: a Clear
 /// counts once. `best_bid`/`best_ask` return kUndefPrice for an empty side.
@@ -49,13 +80,21 @@ struct Violation {
 
 struct InvariantReport {
   std::uint64_t records = 0;
+  std::uint64_t status_records = 0;
+  /// Status records the mapping could not place. Each one stops the
+  /// crossed-book check for its instrument until the venue speaks again.
+  std::uint64_t unmapped_status_records = 0;
   std::uint64_t mutating_records = 0;  ///< A + C + M + R
   std::uint64_t passive_records = 0;   ///< T + F + N
   std::uint64_t observed_mutations = 0;
   std::uint64_t passive_mutations = 0;   ///< violations: a T/F/N that mutated
   std::uint64_t mutation_miscounts = 0;  ///< violations: an A/C/M/R counted != 1
   std::uint64_t boundaries = 0;          ///< F_LAST records seen while Trading
-  std::uint64_t cross_checks = 0;        ///< boundaries where both sides existed
+  /// F_LAST records seen while the instrument was not trading. A run whose
+  /// status records never arrived checks nothing and still reports ok(); this
+  /// is what makes that visible.
+  std::uint64_t boundaries_outside_trading = 0;
+  std::uint64_t cross_checks = 0;  ///< boundaries where both sides existed
   std::uint64_t cross_violations = 0;
   std::uint64_t materializations = 0;
   std::uint64_t dematerializations = 0;  ///< violations: a T/F erased the order it names
@@ -91,7 +130,24 @@ class InvariantHarness {
 
   explicit InvariantHarness(const Book& book, Options opts = {}) : book_(&book), opts_(opts) {}
 
-  void set_session_state(SessionState s) noexcept { session_ = s; }
+  /// The state of an instrument no status record has described yet. A stream
+  /// carrying no status records at all is therefore entirely this, which is
+  /// how the toy fixtures pin themselves Trading.
+  void set_session_state(SessionState s) noexcept { default_state_ = s; }
+
+  void observe(const StatusMsg& status) {
+    const SessionState state = session_state_of(status);
+    states_[status.hd.instrument_id] = state;
+    ++report_.status_records;
+    if (state == SessionState::kUnknown) {
+      ++report_.unmapped_status_records;
+    }
+  }
+
+  [[nodiscard]] SessionState session_state(std::uint32_t instrument_id) const noexcept {
+    const auto it = states_.find(instrument_id);
+    return it == states_.end() ? default_state_ : it->second;
+  }
 
   void before(const MboMsg& rec) {
     pre_mutations_ = book_->mutation_count();
@@ -163,7 +219,11 @@ class InvariantHarness {
 
   // CME and Databento both document the book as undefined mid-event.
   void check_uncrossed(const MboMsg& rec) {
-    if (!is_event_boundary(rec) || session_ != SessionState::kTrading) {
+    if (!is_event_boundary(rec)) {
+      return;
+    }
+    if (session_state(rec.hd.instrument_id) != SessionState::kTrading) {
+      ++report_.boundaries_outside_trading;
       return;
     }
     ++report_.boundaries;
@@ -226,7 +286,8 @@ class InvariantHarness {
   const Book* book_;
   Options opts_;
   InvariantReport report_{};
-  SessionState session_ = SessionState::kUnknown;
+  std::unordered_map<std::uint32_t, SessionState> states_;
+  SessionState default_state_ = SessionState::kUnknown;
 
   std::uint64_t pre_mutations_ = 0;
   bool pre_contained_ = false;

@@ -3,6 +3,7 @@
 #include "bookreplay/invariants.hpp"
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -30,6 +31,20 @@ static_assert(BookLike<TradeMutatesBook>);
 
 constexpr std::uint64_t k0 = 0;
 constexpr std::uint64_t k1 = 1;
+
+/// A second id, so one instrument can be open while another is not.
+constexpr std::uint32_t kSecondInstrument = 42013467;
+
+/// `run_checked` pins one state for a whole stream. These tests need the
+/// state to arrive partway through it, so they drive the harness themselves.
+template <BookLike B>
+void drive(InvariantHarness<B>& harness, B& book, std::span<const MboMsg> records) {
+  for (const MboMsg& rec : records) {
+    harness.before(rec);
+    book.apply(rec);
+    harness.after(rec);
+  }
+}
 
 template <BookLike B>
 void expect_clean_trade_event_is_clean(B& book) {
@@ -204,6 +219,7 @@ TEST(CrossedBook, IsNormalOutsideTradingAndMustNotBeFlagged) {
   EXPECT_EQ(report.cross_violations, k0);
   EXPECT_EQ(report.cross_checks, k0);
   EXPECT_EQ(report.boundaries, k0);
+  EXPECT_EQ(report.boundaries_outside_trading, std::uint64_t{4});
 
   EXPECT_EQ(report.passive_mutations, k1);
   EXPECT_EQ(report.materializations, k1);
@@ -257,6 +273,157 @@ TEST(CrossedBook, EmptySideIsNotACrossing) {
   EXPECT_EQ(report.cross_checks, k0);
   EXPECT_EQ(report.cross_violations, k0);
   EXPECT_TRUE(report.ok());
+}
+
+TEST(SessionMapping, IsTradingDecidesAndTheActionOnlyNamesTheRest) {
+  struct Case {
+    std::uint16_t action;
+    char is_trading;
+    SessionState expected;
+  };
+
+  // The first four are every shape five real NQ days produced; the rest are
+  // what the enum allows and another day could.
+  constexpr Case kCases[] = {
+      {kStatusActionTrading, kTriStateYes, SessionState::kTrading},
+      {kStatusActionNewPriceIndication, kTriStateYes, SessionState::kTrading},
+      {kStatusActionPreOpen, kTriStateNo, SessionState::kPreOpen},
+      {kStatusActionClose, kTriStateNo, SessionState::kClosed},
+      {kStatusActionHalt, kTriStateNo, SessionState::kHalted},
+      {kStatusActionPause, kTriStateNo, SessionState::kHalted},
+      {kStatusActionSuspend, kTriStateNo, SessionState::kHalted},
+      {kStatusActionNotAvailableForTrading, kTriStateNo, SessionState::kClosed},
+      {kStatusActionClose, kTriStateNotAvailable, SessionState::kClosed},
+      {kStatusActionTrading, kTriStateNo, SessionState::kUnknown},
+      {kStatusActionTrading, kTriStateNotAvailable, SessionState::kUnknown},
+      {0, kTriStateNo, SessionState::kUnknown},
+  };
+
+  for (const Case& c : kCases) {
+    EXPECT_EQ(session_state_of(testing::status(42004177, c.action, c.is_trading)), c.expected)
+        << "action " << c.action << ", is_trading " << c.is_trading;
+  }
+}
+
+TEST(SessionGate, AnInstrumentNoStatusRecordDescribedIsNotChecked) {
+  StreamBuilder b = testing::opening_snapshot();
+  b.add(500, Side::kAsk, px(28999, 0), 5).last();
+
+  ToyBook book;
+  InvariantHarness<ToyBook> harness(book);
+  drive(harness, book, b.records());
+
+  EXPECT_EQ(harness.session_state(b.instrument_id()), SessionState::kUnknown);
+  EXPECT_EQ(harness.report().boundaries, k0);
+  EXPECT_EQ(harness.report().cross_checks, k0);
+  EXPECT_EQ(harness.report().boundaries_outside_trading, std::uint64_t{2});
+  EXPECT_TRUE(harness.ok());
+}
+
+TEST(SessionGate, TheOpenTurnsTheCheckOnMidStream) {
+  StreamBuilder b = testing::opening_snapshot();
+  b.add(500, Side::kAsk, px(28999, 0), 5).last();
+  b.add(501, Side::kAsk, px(28999, 0), 5).last();
+  const std::span<const MboMsg> records{b.records()};
+
+  ToyBook book;
+  InvariantHarness<ToyBook> harness(book);
+  harness.observe(testing::status(b.instrument_id(), kStatusActionPreOpen, kTriStateNo));
+  drive(harness, book, records.first(records.size() - 1));
+
+  EXPECT_EQ(harness.report().cross_violations, k0);
+  EXPECT_EQ(harness.report().boundaries_outside_trading, std::uint64_t{2});
+
+  harness.observe(testing::status(b.instrument_id(), kStatusActionTrading, kTriStateYes));
+  drive(harness, book, records.last(1));
+
+  EXPECT_EQ(harness.report().boundaries, k1);
+  EXPECT_EQ(harness.report().cross_violations, k1);
+  EXPECT_EQ(harness.report().status_records, std::uint64_t{2});
+  ASSERT_FALSE(harness.report().violations.empty());
+  EXPECT_EQ(harness.report().violations.front().invariant, Invariant::kUncrossedBook);
+}
+
+TEST(SessionGate, AHaltTurnsTheCheckBackOff) {
+  StreamBuilder b = testing::opening_snapshot();
+  b.add(500, Side::kAsk, px(28999, 0), 5).last();
+  b.add(501, Side::kAsk, px(28999, 0), 5).last();
+  const std::span<const MboMsg> records{b.records()};
+
+  ToyBook book;
+  InvariantHarness<ToyBook> harness(book);
+  harness.observe(testing::status(b.instrument_id(), kStatusActionTrading, kTriStateYes));
+  drive(harness, book, records.first(records.size() - 1));
+
+  EXPECT_EQ(harness.report().cross_violations, k1);
+  EXPECT_EQ(harness.report().boundaries_outside_trading, k0);
+
+  // The venue's shape for a mid-session halt: a pre-open that is not trading,
+  // arriving on an instrument that was.
+  harness.observe(testing::status(b.instrument_id(), kStatusActionPreOpen, kTriStateNo));
+  drive(harness, book, records.last(1));
+
+  EXPECT_EQ(harness.report().cross_violations, k1);
+  EXPECT_EQ(harness.report().boundaries_outside_trading, k1);
+}
+
+TEST(SessionGate, AStatusRecordTheMappingCannotPlaceStopsTheCheck) {
+  StreamBuilder b = testing::opening_snapshot();
+  b.add(500, Side::kAsk, px(28999, 0), 5).last();
+
+  ToyBook book;
+  InvariantHarness<ToyBook> harness(book);
+  harness.observe(testing::status(b.instrument_id(), kStatusActionTrading, kTriStateYes));
+  harness.observe(testing::status(b.instrument_id(), kStatusActionTrading, kTriStateNotAvailable));
+  drive(harness, book, b.records());
+
+  EXPECT_EQ(harness.report().status_records, std::uint64_t{2});
+  EXPECT_EQ(harness.report().unmapped_status_records, k1);
+  EXPECT_EQ(harness.report().boundaries, k0);
+  EXPECT_EQ(harness.report().boundaries_outside_trading, std::uint64_t{2});
+  EXPECT_EQ(harness.report().cross_violations, k0);
+}
+
+TEST(SessionGate, StateIsPerInstrument) {
+  StreamBuilder b = testing::opening_snapshot();
+  b.add(500, Side::kAsk, px(28999, 0), 5).last();
+  const std::uint32_t open_instrument = b.instrument_id();
+
+  b.instrument(kSecondInstrument);
+  b.add(600, Side::kBid, px(29000, 0), 10);
+  b.add(601, Side::kAsk, px(28999, 0), 5).last();
+
+  ToyBook book;
+  InvariantHarness<ToyBook> harness(book);
+  harness.observe(testing::status(open_instrument, kStatusActionTrading, kTriStateYes));
+  harness.observe(testing::status(kSecondInstrument, kStatusActionPreOpen, kTriStateNo));
+  drive(harness, book, b.records());
+
+  EXPECT_EQ(harness.report().cross_violations, k1);
+  EXPECT_EQ(harness.report().boundaries_outside_trading, k1);
+  ASSERT_FALSE(harness.report().violations.empty());
+  EXPECT_EQ(harness.report().violations.front().instrument_id, open_instrument);
+}
+
+TEST(SessionGate, AStatusRecordOverridesThePinnedDefault) {
+  StreamBuilder b = testing::opening_snapshot();
+  b.add(500, Side::kAsk, px(28999, 0), 5).last();
+
+  const auto crossings_seen = [&b](SessionState pinned, const StatusMsg& observed) {
+    ToyBook book;
+    InvariantHarness<ToyBook> harness(book);
+    harness.set_session_state(pinned);
+    harness.observe(observed);
+    drive(harness, book, b.records());
+    return harness.report().cross_violations;
+  };
+
+  const StatusMsg closed =
+      testing::status(b.instrument_id(), kStatusActionClose, kTriStateNo, kTriStateNo);
+  const StatusMsg trading = testing::status(b.instrument_id(), kStatusActionTrading, kTriStateYes);
+
+  EXPECT_EQ(crossings_seen(SessionState::kTrading, closed), k0);
+  EXPECT_EQ(crossings_seen(SessionState::kUnknown, trading), k1);
 }
 
 TEST(WellFormedness, UnknownActionIsRejectedLoudly) {

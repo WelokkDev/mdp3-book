@@ -1,4 +1,4 @@
-// Hand-built MBO streams.
+// Hand-built MBO streams, and the status records that gate them.
 //
 // Shapes here are copied from what a real GLBX.MDP3 file actually contains,
 // not from what the format permits. The snapshot preamble in particular
@@ -23,6 +23,30 @@ inline constexpr std::int64_t kTick = kPriceScale / 4;
 
 [[nodiscard]] constexpr std::int64_t px(std::int64_t whole, std::int64_t ticks = 0) {
   return whole * kOne + ticks * kTick;
+}
+
+inline constexpr std::uint64_t kBaseTs = 1'785'888'000'000'000'000ULL;  // 2026-08-05T00:00:00Z
+
+/// One status record. `is_trading` is a parameter of its own rather than
+/// something derived from the action, because the venue sets the two
+/// independently: a halt arrives as a pre-open that is simply not trading.
+[[nodiscard]] inline StatusMsg status(std::uint32_t instrument_id, std::uint16_t action,
+                                      char is_trading, char is_quoting = kTriStateYes,
+                                      std::uint64_t ts_event = kBaseTs) {
+  StatusMsg r{};
+  r.hd.length = kLengthUnits<StatusMsg>;
+  r.hd.rtype = kRTypeStatus;
+  r.hd.publisher_id = 1;
+  r.hd.instrument_id = instrument_id;
+  r.hd.ts_event = ts_event;
+  r.ts_recv = ts_event;
+  r.action = action;
+  r.reason = 1;
+  r.trading_event = 0;
+  r.is_trading = is_trading;
+  r.is_quoting = is_quoting;
+  r.is_short_sell_restricted = kTriStateNotAvailable;
+  return r;
 }
 
 class StreamBuilder {
@@ -129,7 +153,7 @@ class StreamBuilder {
   }
 
   std::uint32_t instrument_id_;
-  std::uint64_t base_ts_ = 1'785'888'000'000'000'000ULL;  // 2026-08-05T00:00:00Z
+  std::uint64_t base_ts_ = kBaseTs;
   std::uint32_t seq_ = 1;
   std::vector<MboMsg> records_;
 };

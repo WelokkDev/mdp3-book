@@ -4,8 +4,9 @@ CME MDP 3.0 limit order book reconstruction from Databento DBN, checked against
 an independent vendor snapshot.
 
 **Work in progress.** The decoder, the invariant harness, a trades-only
-replay driver and a reference order-by-order book are built and tested. The
-book has not yet been diffed against `mbp-10`, and nothing fills against it.
+replay driver and a reference order-by-order book are built and tested, and the
+book replays five real trading days with every invariant holding. It has not yet
+been diffed against `mbp-10`, and nothing fills against it.
 
 ## Why
 
@@ -40,8 +41,10 @@ pinned and neither linked into the library: `databento-dbn` locally, which is th
 only one that can see the licensed corpus, and `databento-cpp` in CI. The suite
 runs under ASan and UBSan.
 
-Still open: only `mbo` has been checked against a real CME pull. The other four
-schemas are checked against fixtures of two to four records each.
+Still open: only `mbo` has been diffed against another decoder on a real CME
+pull. `status` has since been read from five real days and driven through the
+book, but never oracle-diffed; the remaining three schemas are checked against
+fixtures of two to four records each.
 
 ## Replay, without a book
 
@@ -104,6 +107,17 @@ recomputes every level total from its queue and throws on any disagreement,
 and the tests run it after every record. Invariants were written and tested against deliberately
 broken books in `tests/toy_book.hpp` before the book existed; `Book` now runs
 the same harness unchanged.
+
+The crossed-book invariant is checked per instrument, and only while the status
+schema says that instrument is trading. The venue reports a mid-session halt as
+a pre-open carrying a market-event reason rather than as a halt action — NQ did
+exactly that for five seconds on 2026-08-25 — so `is_trading` decides and the
+action only names which non-trading state it was. `book_check` merges the two
+schemas on `ts_event` and reproduces the before and after: 2026-08-26 goes from
+504 crossed boundaries with the state pinned to Trading to 0 once gated, 593 of
+its 18,747,347 boundaries excluded as pre-open or closed; 2026-08-25 from 2,476
+to 0, with 2,273 of its 2,621 excluded boundaries inside that halt. All five
+days from 2026-08-24 to 28 pass with every counter reconciling.
 
 ## Build
 
