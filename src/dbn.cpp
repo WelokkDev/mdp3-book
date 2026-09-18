@@ -38,4 +38,32 @@ const char* side_name(Side s) noexcept {
   return "<unknown>";
 }
 
+const char* instrument_class_name(InstrumentClass c) noexcept {
+  switch (c) {
+    case InstrumentClass::kBond:
+      return "Bond";
+    case InstrumentClass::kCall:
+      return "Call";
+    case InstrumentClass::kFuture:
+      return "Future";
+    case InstrumentClass::kIndex:
+      return "Index";
+    case InstrumentClass::kStock:
+      return "Stock";
+    case InstrumentClass::kMixedSpread:
+      return "MixedSpread";
+    case InstrumentClass::kPut:
+      return "Put";
+    case InstrumentClass::kFutureSpread:
+      return "FutureSpread";
+    case InstrumentClass::kOptionSpread:
+      return "OptionSpread";
+    case InstrumentClass::kFxSpot:
+      return "FxSpot";
+    case InstrumentClass::kCommoditySpot:
+      return "CommoditySpot";
+  }
+  return "<unknown>";
+}
+
 }  // namespace bookreplay

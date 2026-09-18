@@ -42,6 +42,7 @@ add_library(bookreplay
   src/book.cpp
   src/dbn.cpp
   src/dbn_reader.cpp
+  src/definition.cpp
   src/order.cpp
   src/replay.cpp
   src/trade_source.cpp

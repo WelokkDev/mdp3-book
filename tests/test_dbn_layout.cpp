@@ -8,6 +8,7 @@
 #include <bit>
 #include <cstdint>
 #include <cstring>
+#include <string_view>
 #include <type_traits>
 
 #include <gtest/gtest.h>
@@ -19,10 +20,15 @@ static_assert(std::endian::native == std::endian::little,
               "DBN is little-endian on the wire; a big-endian host needs byte swaps that "
               "this decoder does not implement");
 
-template <typename T>
-void put(std::array<std::uint8_t, sizeof(MboMsg)>& buf, std::size_t offset, T value) {
+template <typename T, std::size_t N>
+void put(std::array<std::uint8_t, N>& buf, std::size_t offset, T value) {
   static_assert(std::is_trivially_copyable_v<T>);
   std::memcpy(buf.data() + offset, &value, sizeof(T));
+}
+
+template <std::size_t N>
+void put_str(std::array<std::uint8_t, N>& buf, std::size_t offset, std::string_view value) {
+  std::memcpy(buf.data() + offset, value.data(), value.size());
 }
 
 TEST(DbnLayout, FieldsDecodeFromRawBytesAtTheDocumentedOffsets) {
@@ -67,6 +73,48 @@ TEST(DbnLayout, FieldsDecodeFromRawBytesAtTheDocumentedOffsets) {
   EXPECT_TRUE(is_event_boundary(rec));
   EXPECT_EQ(action_of(rec), Action::kAdd);
   EXPECT_EQ(side_of(rec), Side::kBid);
+}
+
+// The leg fields are what the instrument catalog keys on, and every one of
+// them is zero in the committed fixture, so nothing else in the suite would
+// notice them trading places. Built from bytes rather than from the struct,
+// with no two values alike.
+TEST(DbnLayout, LegFieldsDecodeFromRawBytesAtTheDocumentedOffsets) {
+  std::array<std::uint8_t, sizeof(InstrumentDefMsg)> raw{};
+  put<std::uint8_t>(raw, 0, kLengthUnits<InstrumentDefMsg>);
+  put<std::uint8_t>(raw, 1, kRTypeInstrumentDef);
+  put<std::uint32_t>(raw, 4, 42037493);
+  put<std::int64_t>(raw, 24, 50'000'000);
+  put<std::int64_t>(raw, 120, 7LL * kPriceScale);
+  put<std::uint32_t>(raw, 188, 261401);
+  put<std::uint32_t>(raw, 208, 42004177);
+  put<std::uint16_t>(raw, 220, 2);
+  put<std::uint16_t>(raw, 222, 1);
+  put_str(raw, 238, "NQZ6-NQM7");
+  put_str(raw, 416, "NQM7");
+  put<char>(raw, 487, 'S');
+  put<char>(raw, 501, 'F');
+  put<char>(raw, 502, 'B');
+
+  InstrumentDefMsg rec{};
+  std::memcpy(&rec, raw.data(), sizeof(rec));
+
+  EXPECT_EQ(rec.hd.rtype, kRTypeInstrumentDef);
+  EXPECT_EQ(rec.hd.instrument_id, std::uint32_t{42037493});
+  EXPECT_EQ(rec.min_price_increment, 50'000'000);
+
+  EXPECT_EQ(rec.leg_price, 7LL * kPriceScale);
+  EXPECT_EQ(rec.leg_instrument_id, std::uint32_t{261401});
+  EXPECT_EQ(rec.leg_underlying_id, std::uint32_t{42004177});
+  EXPECT_EQ(rec.leg_count, std::uint16_t{2});
+  EXPECT_EQ(rec.leg_index, std::uint16_t{1});
+  EXPECT_EQ(rec.leg_instrument_class, 'F');
+  EXPECT_EQ(rec.leg_side, 'B');
+  EXPECT_EQ(cstr_view(rec.leg_raw_symbol), "NQM7");
+
+  EXPECT_EQ(cstr_view(rec.raw_symbol), "NQZ6-NQM7");
+  EXPECT_EQ(instrument_class_of(rec), InstrumentClass::kFutureSpread);
+  EXPECT_TRUE(is_spread(instrument_class_of(rec)));
 }
 
 // Record #1 of glbx-mdp3-20260805.mbo.dbn.zst, field for field.
@@ -131,6 +179,40 @@ TEST(ActionClassification, UnknownActionCharsAreRejected) {
   EXPECT_FALSE(is_known_side('Z'));
 }
 
+TEST(InstrumentClassification, OnlyMixedFutureAndOptionSpreadsAreSpreads) {
+  EXPECT_TRUE(is_spread(InstrumentClass::kMixedSpread));
+  EXPECT_TRUE(is_spread(InstrumentClass::kFutureSpread));
+  EXPECT_TRUE(is_spread(InstrumentClass::kOptionSpread));
+
+  EXPECT_FALSE(is_spread(InstrumentClass::kBond));
+  EXPECT_FALSE(is_spread(InstrumentClass::kCall));
+  EXPECT_FALSE(is_spread(InstrumentClass::kFuture));
+  EXPECT_FALSE(is_spread(InstrumentClass::kIndex));
+  EXPECT_FALSE(is_spread(InstrumentClass::kStock));
+  EXPECT_FALSE(is_spread(InstrumentClass::kPut));
+  EXPECT_FALSE(is_spread(InstrumentClass::kFxSpot));
+  EXPECT_FALSE(is_spread(InstrumentClass::kCommoditySpot));
+}
+
+TEST(InstrumentClassification, OnlyTheDocumentedClassBytesAreKnown) {
+  for (const char c : {'B', 'C', 'F', 'I', 'K', 'M', 'P', 'S', 'T', 'X', 'Y'}) {
+    EXPECT_TRUE(is_known_instrument_class(c)) << c;
+  }
+  for (const char c : {'\0', 'A', 'N', 'Z', 'f', '~'}) {
+    EXPECT_FALSE(is_known_instrument_class(c)) << static_cast<int>(c);
+  }
+}
+
+TEST(FixedWidthString, ViewsUpToTheFirstNulAndNeverPastTheField) {
+  constexpr std::array<char, 8> padded{'N', 'Q', 'U', '6', '\0', 'Z', 'Z', 'Z'};
+  constexpr std::array<char, 4> full{'N', 'Q', 'U', '6'};
+  constexpr std::array<char, 4> empty{};
+
+  EXPECT_EQ(cstr_view(padded), "NQU6");
+  EXPECT_EQ(cstr_view(full), "NQU6");
+  EXPECT_TRUE(cstr_view(empty).empty());
+}
+
 TEST(DbnVersionGate, AcceptsOnlyTheTestedVersion) {
   EXPECT_TRUE(is_supported_dbn_version(3));
   EXPECT_FALSE(is_supported_dbn_version(2));
@@ -149,6 +231,20 @@ TEST(Naming, EveryActionAndSideHasAName) {
   EXPECT_STREQ(side_name(Side::kBid), "Bid");
   EXPECT_STREQ(side_name(Side::kAsk), "Ask");
   EXPECT_STREQ(side_name(Side::kNone), "None");
+}
+
+TEST(Naming, EveryInstrumentClassHasAName) {
+  EXPECT_STREQ(instrument_class_name(InstrumentClass::kBond), "Bond");
+  EXPECT_STREQ(instrument_class_name(InstrumentClass::kCall), "Call");
+  EXPECT_STREQ(instrument_class_name(InstrumentClass::kFuture), "Future");
+  EXPECT_STREQ(instrument_class_name(InstrumentClass::kIndex), "Index");
+  EXPECT_STREQ(instrument_class_name(InstrumentClass::kStock), "Stock");
+  EXPECT_STREQ(instrument_class_name(InstrumentClass::kMixedSpread), "MixedSpread");
+  EXPECT_STREQ(instrument_class_name(InstrumentClass::kPut), "Put");
+  EXPECT_STREQ(instrument_class_name(InstrumentClass::kFutureSpread), "FutureSpread");
+  EXPECT_STREQ(instrument_class_name(InstrumentClass::kOptionSpread), "OptionSpread");
+  EXPECT_STREQ(instrument_class_name(InstrumentClass::kFxSpot), "FxSpot");
+  EXPECT_STREQ(instrument_class_name(InstrumentClass::kCommoditySpot), "CommoditySpot");
 }
 
 }  // namespace

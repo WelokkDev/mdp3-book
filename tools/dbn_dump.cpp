@@ -3,12 +3,11 @@
 
 #include "bookreplay/dbn_reader.hpp"
 
-#include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <string>
-#include <vector>
+#include <string_view>
 
 namespace {
 
@@ -16,12 +15,9 @@ using namespace bookreplay;
 
 constexpr std::size_t kOutBufSize = 1 << 20;
 
-/// Fixed-width DBN strings are NUL-padded.
-template <std::size_t N>
-void put_cstr(std::string& out, const std::array<char, N>& field) {
-  const auto len =
-      static_cast<std::size_t>(std::find(field.begin(), field.end(), '\0') - field.begin());
-  out.append(field.data(), len);
+void field_s(std::string& out, std::string_view s) {
+  out += '\t';
+  out += s;
 }
 
 void field_u(std::string& out, std::uint64_t v) {
@@ -147,32 +143,19 @@ void dump_definition(std::string& out, const InstrumentDefMsg& r) {
   field_u(out, r.channel_id);
   field_u(out, r.leg_count);
   field_u(out, r.leg_index);
-  out += '\t';
-  put_cstr(out, r.currency);
-  out += '\t';
-  put_cstr(out, r.settl_currency);
-  out += '\t';
-  put_cstr(out, r.secsubtype);
-  out += '\t';
-  put_cstr(out, r.raw_symbol);
-  out += '\t';
-  put_cstr(out, r.group);
-  out += '\t';
-  put_cstr(out, r.exchange);
-  out += '\t';
-  put_cstr(out, r.asset);
-  out += '\t';
-  put_cstr(out, r.cfi);
-  out += '\t';
-  put_cstr(out, r.security_type);
-  out += '\t';
-  put_cstr(out, r.unit_of_measure);
-  out += '\t';
-  put_cstr(out, r.underlying);
-  out += '\t';
-  put_cstr(out, r.strike_price_currency);
-  out += '\t';
-  put_cstr(out, r.leg_raw_symbol);
+  field_s(out, cstr_view(r.currency));
+  field_s(out, cstr_view(r.settl_currency));
+  field_s(out, cstr_view(r.secsubtype));
+  field_s(out, cstr_view(r.raw_symbol));
+  field_s(out, cstr_view(r.group));
+  field_s(out, cstr_view(r.exchange));
+  field_s(out, cstr_view(r.asset));
+  field_s(out, cstr_view(r.cfi));
+  field_s(out, cstr_view(r.security_type));
+  field_s(out, cstr_view(r.unit_of_measure));
+  field_s(out, cstr_view(r.underlying));
+  field_s(out, cstr_view(r.strike_price_currency));
+  field_s(out, cstr_view(r.leg_raw_symbol));
   field_c(out, r.instrument_class);
   field_c(out, r.match_algorithm);
   field_u(out, r.main_fraction);

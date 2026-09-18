@@ -46,8 +46,7 @@ venv/
 .ruff_cache/
 .mypy_cache/
 
-# Private working documents — the spec names engine internals from another
-# repo, and this one is public.
+# Private working files
 spec.md
 .claude/
 

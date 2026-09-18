@@ -1,6 +1,9 @@
 #include "bookreplay/trade_source.hpp"
 
+#include <cstdint>
 #include <utility>
+
+#include "hex_byte.hpp"
 
 namespace bookreplay {
 
@@ -34,9 +37,6 @@ void require_print(const Tick& tick) {
          ts_recv <= static_cast<std::uint64_t>(kNever);
 }
 
-constexpr std::uint16_t kSchemaMbo = 0;
-constexpr std::uint16_t kSchemaTrades = 4;
-
 void require_trade_schema(const DbnMetadata& meta) {
   if (meta.schema && *meta.schema != kSchemaMbo && *meta.schema != kSchemaTrades) {
     throw ReplayError("file schema is neither trades nor mbo; the replay would be silently empty");
@@ -48,10 +48,12 @@ template <typename Rec>
                              TradeSourceStats& stats) {
   ++stats.records;
   if (!is_known_action(rec.action)) {
-    throw ReplayError("record carries an action byte outside the documented set");
+    throw ReplayError("record carries action " + hex_byte(static_cast<std::uint8_t>(rec.action)) +
+                      ", outside the documented set");
   }
   if (!is_known_side(rec.side)) {
-    throw ReplayError("record carries a side byte outside the documented set");
+    throw ReplayError("record carries side " + hex_byte(static_cast<std::uint8_t>(rec.side)) +
+                      ", outside the documented set");
   }
   if (static_cast<Action>(rec.action) != Action::kTrade) {
     ++stats.skipped_non_trade;

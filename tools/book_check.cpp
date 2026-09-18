@@ -1,9 +1,11 @@
 // Replays a real MBO day through Book under InvariantHarness, merging the
 // status schema in so the crossed-book check runs only while the venue says
-// the instrument is trading.
+// the instrument is trading. Given the definition schema, it also checks every
+// price against its own instrument's tick.
 
 #include "bookreplay/book.hpp"
 #include "bookreplay/dbn_reader.hpp"
+#include "bookreplay/definition.hpp"
 #include "bookreplay/invariants.hpp"
 
 #include <algorithm>
@@ -15,6 +17,7 @@
 #include <filesystem>
 #include <iterator>
 #include <limits>
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -31,6 +34,7 @@ constexpr std::uint64_t kVerifyPeriod = 1'000'000;
 struct Options {
   std::string mbo_path;
   std::string status_path;
+  std::string definition_path;
   std::uint32_t period = 1;
   std::uint64_t limit = 0;
   bool assume_trading = false;
@@ -39,7 +43,7 @@ struct Options {
 int usage() {
   std::fputs(
       "usage: book_check <mbo.dbn[.zst]> [--status FILE.dbn[.zst]] [--assume-trading]\n"
-      "                  [--period N] [--limit N]\n",
+      "                  [--definition FILE.dbn[.zst]] [--period N] [--limit N]\n",
       stderr);
   return 2;
 }
@@ -60,6 +64,10 @@ bool parse_u64(const char* text, std::uint64_t& out) {
 /// fails loudly on its own.
 void require_coverage(const DbnMetadata& status, const DbnMetadata& mbo) {
   constexpr std::uint64_t kOpenEnded = std::numeric_limits<std::uint64_t>::max();
+  if (status.schema && *status.schema != kSchemaStatus) {
+    throw BookreplayError("expected the status schema (" + std::to_string(kSchemaStatus) +
+                          "), found schema " + std::to_string(*status.schema));
+  }
   if (status.dataset != mbo.dataset) {
     throw BookreplayError("the status file is from dataset " + status.dataset + ", not " +
                           mbo.dataset);
@@ -92,6 +100,114 @@ std::vector<StatusMsg> read_status(const std::string& path, const DbnMetadata& m
     return a.hd.ts_event < b.hd.ts_event;
   });
   return out;
+}
+
+InstrumentCatalog read_catalog(const std::string& path, const DbnMetadata& mbo_meta) {
+  DbnReader reader{std::filesystem::path{path}};
+  require_definitions_for(reader.metadata(), mbo_meta);
+  return read_definitions(reader);
+}
+
+struct DefinitionReport {
+  std::uint64_t catalog_instruments = 0;
+  std::uint64_t catalog_outrights = 0;
+  std::uint64_t catalog_spreads = 0;
+  std::uint64_t catalog_class_leg_disagreeing_records = 0;
+  std::uint64_t catalog_instruments_missing_legs = 0;
+  bool catalog_reconciles = true;
+  std::uint64_t outrights_seen = 0;
+  std::uint64_t spreads_seen = 0;
+  std::uint64_t aligned_prices = 0;
+  std::uint64_t misaligned_prices = 0;
+  std::uint64_t undef_prices = 0;
+  std::uint64_t prices_without_definition = 0;
+  std::uint64_t prices_without_tick_size = 0;
+  std::vector<std::uint32_t> without_definition;
+  std::vector<std::uint32_t> without_tick_size;
+  std::uint64_t first_misaligned_index = 0;
+  std::int64_t first_misaligned_increment = 0;
+  MboMsg first_misaligned{};
+
+  [[nodiscard]] bool reconciles(std::uint64_t records) const noexcept {
+    const std::uint64_t priced =
+        aligned_prices + misaligned_prices + prices_without_definition + prices_without_tick_size;
+    return catalog_reconciles && priced + undef_prices == records;
+  }
+};
+
+/// The remainder catches only an increment too coarse for the data. One that
+/// divides the true increment leaves every price on grid, and no run of prices
+/// proves otherwise, since a day's prices need not span the grid.
+void check_price(const InstrumentCatalog& catalog, const MboMsg& rec, std::uint64_t record_index,
+                 DefinitionReport& out) {
+  if (is_undef_price(rec.price)) {
+    ++out.undef_prices;
+    return;
+  }
+  const InstrumentDefinition* def = catalog.find(rec.hd.instrument_id);
+  if (def == nullptr) {
+    ++out.prices_without_definition;
+  } else if (!def->has_tick_size()) {
+    ++out.prices_without_tick_size;
+  } else if (rec.price % def->min_price_increment == 0) {
+    ++out.aligned_prices;
+  } else {
+    if (out.misaligned_prices == 0) {
+      out.first_misaligned_index = record_index;
+      out.first_misaligned_increment = def->min_price_increment;
+      out.first_misaligned = rec;
+    }
+    ++out.misaligned_prices;
+  }
+}
+
+void count_instruments(const InstrumentCatalog& catalog, const std::set<std::uint32_t>& seen,
+                       DefinitionReport& out) {
+  out.catalog_instruments = catalog.instrument_count();
+  out.catalog_outrights = catalog.outright_count();
+  out.catalog_spreads = catalog.spread_count();
+  out.catalog_class_leg_disagreeing_records = catalog.stats().class_leg_disagreements;
+  out.catalog_reconciles = catalog.stats().reconciles();
+  for (const std::uint32_t instrument_id : catalog.instruments()) {
+    if (!catalog.at(instrument_id).has_all_legs()) {
+      ++out.catalog_instruments_missing_legs;
+    }
+  }
+  for (const std::uint32_t instrument_id : seen) {
+    const InstrumentDefinition* def = catalog.find(instrument_id);
+    if (def == nullptr) {
+      out.without_definition.push_back(instrument_id);
+      continue;
+    }
+    if (!def->has_tick_size()) {
+      out.without_tick_size.push_back(instrument_id);
+    }
+    if (def->is_spread()) {
+      ++out.spreads_seen;
+    } else {
+      ++out.outrights_seen;
+    }
+  }
+}
+
+[[nodiscard]] bool reconciled(const InvariantReport& report,
+                              const std::optional<DefinitionReport>& definitions) {
+  return report.reconciles() && (!definitions || definitions->reconciles(report.records));
+}
+
+/// A price off its instrument's grid fails the run, since either the catalog
+/// or the data is wrong. So does one the catalog cannot place at all: the grid
+/// check silently never ran on it, which no caller reading the exit code could
+/// tell from a clean day. A spread holding fewer leg records than it declares
+/// is that same silence, so it fails too. An instrument the venue lists
+/// without a usable increment is only listed, the way one without a status
+/// record is.
+[[nodiscard]] bool passed(const InvariantReport& report,
+                          const std::optional<DefinitionReport>& definitions) {
+  return report.ok() && reconciled(report, definitions) &&
+         (!definitions ||
+          (definitions->misaligned_prices == 0 && definitions->prices_without_definition == 0 &&
+           definitions->catalog_instruments_missing_legs == 0));
 }
 
 void row(std::string& out, const char* key, std::uint64_t value) {
@@ -130,7 +246,8 @@ std::unordered_map<std::uint64_t, std::uint64_t> context_times(const InvariantRe
 }
 
 void print_report(const InvariantReport& report, const Book& book,
-                  const std::vector<std::uint32_t>& without_status) {
+                  const std::vector<std::uint32_t>& without_status,
+                  const std::optional<DefinitionReport>& definitions) {
   std::string out;
   row(out, "records", report.records);
   row(out, "status_records", report.status_records);
@@ -152,13 +269,59 @@ void print_report(const InvariantReport& report, const Book& book,
   row(out, "unknown_modifies", book.unknown_modifies());
   row(out, "duplicate_adds", book.duplicate_adds());
   row(out, "instruments_without_status", without_status.size());
-  row(out, "reconciles", report.reconciles() ? 1 : 0);
-  row(out, "ok", report.ok() ? 1 : 0);
+  if (definitions) {
+    row(out, "catalog_instruments", definitions->catalog_instruments);
+    row(out, "catalog_outrights", definitions->catalog_outrights);
+    row(out, "catalog_spreads", definitions->catalog_spreads);
+    row(out, "catalog_class_leg_disagreeing_records",
+        definitions->catalog_class_leg_disagreeing_records);
+    row(out, "catalog_instruments_missing_legs", definitions->catalog_instruments_missing_legs);
+    row(out, "outrights_seen", definitions->outrights_seen);
+    row(out, "spreads_seen", definitions->spreads_seen);
+    row(out, "aligned_prices", definitions->aligned_prices);
+    row(out, "misaligned_prices", definitions->misaligned_prices);
+    row(out, "undef_prices", definitions->undef_prices);
+    row(out, "prices_without_definition", definitions->prices_without_definition);
+    row(out, "prices_without_tick_size", definitions->prices_without_tick_size);
+    row(out, "instruments_without_definition", definitions->without_definition.size());
+    row(out, "instruments_without_tick_size", definitions->without_tick_size.size());
+  }
+  row(out, "reconciles", reconciled(report, definitions) ? 1 : 0);
+  row(out, "ok", passed(report, definitions) ? 1 : 0);
 
   for (const std::uint32_t instrument_id : without_status) {
     out += "instrument_without_status\t";
     out += std::to_string(instrument_id);
     out += '\n';
+  }
+
+  if (definitions) {
+    for (const std::uint32_t instrument_id : definitions->without_definition) {
+      out += "instrument_without_definition\t";
+      out += std::to_string(instrument_id);
+      out += '\n';
+    }
+    for (const std::uint32_t instrument_id : definitions->without_tick_size) {
+      out += "instrument_without_tick_size\t";
+      out += std::to_string(instrument_id);
+      out += '\n';
+    }
+    if (definitions->misaligned_prices != 0) {
+      const MboMsg& rec = definitions->first_misaligned;
+      out += "misaligned_price\t";
+      out += std::to_string(definitions->first_misaligned_index);
+      out += '\t';
+      out += std::to_string(rec.hd.instrument_id);
+      out += '\t';
+      out += rec.action;
+      out += '\t';
+      out += std::to_string(rec.price);
+      out += '\t';
+      out += std::to_string(definitions->first_misaligned_increment);
+      out += '\t';
+      out += time_of_day(rec.hd.ts_event);
+      out += '\n';
+    }
   }
 
   const std::unordered_map<std::uint64_t, std::uint64_t> times = context_times(report);
@@ -188,9 +351,15 @@ void print_report(const InvariantReport& report, const Book& book,
 
 int run(const Options& opts) {
   DbnReader reader{std::filesystem::path{opts.mbo_path}};
-  const std::vector<StatusMsg> statuses =
-      opts.status_path.empty() ? std::vector<StatusMsg>{}
-                               : read_status(opts.status_path, reader.metadata());
+  const std::vector<StatusMsg> statuses = opts.status_path.empty()
+                                              ? std::vector<StatusMsg>{}
+                                              : read_status(opts.status_path, reader.metadata());
+  InstrumentCatalog catalog;
+  std::optional<DefinitionReport> definitions;
+  if (!opts.definition_path.empty()) {
+    catalog = read_catalog(opts.definition_path, reader.metadata());
+    definitions.emplace();
+  }
 
   Book book;
   InvariantHarness<Book>::Options harness_opts;
@@ -225,6 +394,9 @@ int run(const Options& opts) {
     harness.before(*rec);
     book.apply(*rec);
     harness.after(*rec);
+    if (definitions) {
+      check_price(catalog, *rec, harness.report().records - 1, *definitions);
+    }
 
     if (++since_verify == kVerifyPeriod) {
       since_verify = 0;
@@ -239,12 +411,20 @@ int run(const Options& opts) {
   std::vector<std::uint32_t> without_status;
   std::set_difference(seen.begin(), seen.end(), described.begin(), described.end(),
                       std::back_inserter(without_status));
-  print_report(harness.report(), book, without_status);
+  if (definitions) {
+    count_instruments(catalog, seen, *definitions);
+  }
+  print_report(harness.report(), book, without_status, definitions);
   if (harness.report().cross_checks == 0) {
     std::fputs("book_check: no boundary was checked, so ok proves nothing about crossings\n",
                stderr);
   }
-  return harness.ok() ? 0 : 1;
+  if (definitions && definitions->aligned_prices + definitions->misaligned_prices == 0) {
+    std::fputs(
+        "book_check: no price was checked against a tick, so ok proves nothing about the grid\n",
+        stderr);
+  }
+  return passed(harness.report(), definitions) ? 0 : 1;
 }
 
 }  // namespace
@@ -261,6 +441,8 @@ int main(int argc, char** argv) {
     const bool has_value = i + 1 < argc;
     if (arg == "--status" && has_value) {
       opts.status_path = argv[++i];
+    } else if (arg == "--definition" && has_value) {
+      opts.definition_path = argv[++i];
     } else if (arg == "--period" && has_value) {
       std::uint64_t value = 0;
       if (!parse_u64(argv[++i], value) || value > std::numeric_limits<std::uint32_t>::max()) {

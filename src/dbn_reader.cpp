@@ -8,6 +8,8 @@
 #include <utility>
 #include <zstd.h>
 
+#include "hex_byte.hpp"
+
 namespace bookreplay {
 namespace {
 
@@ -45,11 +47,6 @@ using AlignedBuffer = std::unique_ptr<std::byte[], AlignedDelete>;
 
 AlignedBuffer allocate_aligned(std::size_t n) {
   return AlignedBuffer{static_cast<std::byte*>(::operator new(n, std::align_val_t{kBufferAlign}))};
-}
-
-std::string hex_byte(std::uint8_t v) {
-  static constexpr char kDigits[] = "0123456789abcdef";
-  return std::string{'0', 'x', kDigits[v >> 4], kDigits[v & 0x0F]};
 }
 
 template <typename T>

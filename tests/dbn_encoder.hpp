@@ -10,14 +10,25 @@
 
 #include "bookreplay/dbn.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <zstd.h>
 
 namespace bookreplay::testing {
+
+inline void set_cstr(std::span<char> field, std::string_view text) {
+  if (text.size() >= field.size()) {
+    throw std::runtime_error("string does not fit its fixed-width DBN field");
+  }
+  std::fill(field.begin(), field.end(), '\0');
+  std::copy(text.begin(), text.end(), field.begin());
+}
 
 /// Mirrors DbnMetadata's variable-length tail on the encoding side.
 struct EncodedMapping {
@@ -178,12 +189,9 @@ class DbnEncoder {
   }
 
   static void append_cstr(std::vector<std::byte>& out, const std::string& s, std::size_t width) {
-    if (s.size() >= width) {
-      throw std::runtime_error("string does not fit its fixed-width DBN field");
-    }
     const std::size_t start = out.size();
     out.resize(start + width);
-    std::memcpy(out.data() + start, s.data(), s.size());
+    set_cstr({reinterpret_cast<char*>(out.data() + start), width}, s);
   }
 
   void append_symbols(std::vector<std::byte>& out, const std::vector<std::string>& list) const {

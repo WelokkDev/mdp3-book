@@ -1,12 +1,11 @@
 # bookreplay
 
-CME MDP 3.0 limit order book reconstruction from Databento DBN, checked against
-an independent vendor snapshot.
+CME MDP 3.0 limit order book reconstruction from Databento DBN.
 
-**Work in progress.** The decoder, the invariant harness, a trades-only
-replay driver and a reference order-by-order book are built and tested, and the
-book replays five real trading days with every invariant holding. It has not yet
-been diffed against `mbp-10`, and nothing fills against it.
+**Work in progress.** The decoder, invariant harness, trades-only replay
+driver, order-by-order book and instrument catalog are built and tested, and the
+book replays five real trading days with every invariant holding. The book has
+not been diffed against `mbp-10`, and nothing fills against it.
 
 ## Why
 
@@ -15,9 +14,9 @@ the market touched but did not trade through. That depends on queue position, an
 a bar has no queue.
 
 Rebuilding a book from market-by-order is easy to do approximately and hard to
-know you got right. The check is the venue's own top-ten snapshot: if the rebuilt
-book matches `mbp-10` at every event boundary across a real trading day, there is
-nothing left to argue about.
+know you got right. The check is the venue's own top-ten snapshot: match
+`mbp-10` at every event boundary across a real day and there is nothing left to
+argue about.
 
 ## Decoder
 
@@ -31,27 +30,25 @@ v1 and v2 files are refused, not converted. v3 rewrote `InstrumentDefMsg`, so
 reading a v2 file with the v3 struct gives plausible garbage instead of an error.
 Committed v1 and v2 fixtures prove the refusal fires.
 
-Checked against a full GLBX.MDP3 `mbo` day (2026-08-05, NQ parent, 28,562,350
-records): every record decodes field-for-field identically to Databento's own
-decoder. All five schemas round-trip against Databento's published fixtures. A
-test-only encoder generates streams the decoder has never seen, including
-`ts_out`-extended records, records straddling buffer refills and multi-frame
-zstd. Two differential oracles run against independent implementations, both
-pinned and neither linked into the library: `databento-dbn` locally, which is the
-only one that can see the licensed corpus, and `databento-cpp` in CI. The suite
-runs under ASan and UBSan.
+Every record decodes field-for-field identically to Databento's own decoder on
+real CME data: a full `mbo` day (2026-08-05, NQ parent, 28,562,350 records,
+pulled before the 2026-08-08 renormalization), and the 2026-08-24 to 28 corpus:
+103,318,862 `mbp-10` records, 638 `status` and 160 `definition`. All five schemas
+also round-trip against Databento's published fixtures. A test-only encoder
+generates streams the decoder has never seen: `ts_out` records, records
+straddling buffer refills, multi-frame zstd. Two differential
+oracles run against independent implementations, both pinned and neither linked
+into the library: `databento-dbn` locally, the only one that can see the licensed
+corpus, and `databento-cpp` in CI. The suite runs under ASan and UBSan.
 
-Still open: only `mbo` has been diffed against another decoder on a real CME
-pull. `status` has since been read from five real days and driven through the
-book, but never oracle-diffed; the remaining three schemas are checked against
-fixtures of two to four records each.
+Still open: `trades` is checked only against a two-record fixture, since `mbo`
+carries the prints this project uses and the schema was never pulled.
 
-## Replay, without a book
+## Fills
 
-`Replay` takes orders with a side, type, tick level, quantity, an instant they go
-live and an optional OCO group, replays the market between two points, and
-reports every fill in order with exact timestamps. Trade prints drive it. There
-is no book and no queue model, which bounds what it can answer.
+`Replay` fills orders against trade prints, reporting each fill in order with
+exact timestamps. `Book` rebuilds the queue those fills should consult. Nothing
+connects them yet, and that gap is the point of the project.
 
 | Order type | Fills when |
 |---|---|
@@ -60,64 +57,70 @@ is no book and no queue model, which bounds what it can answer.
 | Stop | a print at or through the trigger, filled the same way |
 | Stop-limit | elected the same way, then rests at its cap |
 
-Four rules are worth calling out, since the naive version gets each one wrong:
+Four rules the naive version gets wrong:
 
 - Databento's trade `Side` is the aggressor's, so a print aggressed by the other
   side is the touch we are not crossing, and one tick is the least the book can
-  be apart. `ReplayStats::tick_charged_qty` reports how much of that was charged.
-  It is a floor on the cost of crossing, not on the cost of the order; a large
-  order still fills print by print, and that residual needs the book.
+  be apart. `ReplayStats::tick_charged_qty` reports how much was charged: a floor
+  on the cost of crossing, not on the cost of the order.
 - Stops are trade-elected, as CME's are. A quote resting at the trigger does not
   fire one.
 - CME refuses a stop whose trigger is not strictly beyond the last trade price at
-  order entry, and so does this, judged at arrival. The position it was meant to
-  protect then shows as unprotected for the rest of the run instead of exiting in
-  an orderly way that never happened.
+  order entry, and so does this, judged at arrival. The position then shows as
+  unprotected rather than exiting in a way that never happened.
 - OCO is quantity-linked, not cancel-on-first-fill. A fill of *q* on any member
   reduces every sibling by *q*, and a member reaching zero cancels its siblings.
   The two rules agree at one lot, which is how the wrong one survives review.
 
 Latency is three explicit parameters with no defaults (decision to live, fill to
-protection armed, cancel to removed) and the CLI sweeps a curve across them
-instead of quoting one number. `NakedWindowScan` measures the window between an
-entry filling and its stop reaching the exchange: whether a print reached the
+protection armed, cancel to removed) and the CLI sweeps a curve across the first
+rather than quoting one number. `NakedWindowScan` measures the gap between
+an entry filling and its stop reaching the exchange: whether a print reached the
 stop first, when, and the worst excursion in ticks.
 
-## Book
-
-`Book` rebuilds every instrument in the stream order by order: a FIFO queue per
-price level, the resting order behind every id, and `queue_ahead`, the quantity
-a fill has to consume before it reaches a given order. FIFO is what NQ outrights
-use (`match_algorithm` 'F'); a pro-rata product has no single queue position,
-and the book does not check which it was handed.
+`Book` rebuilds every instrument order by order: a FIFO queue per price level,
+the resting order behind every id, and `queue_ahead`, the quantity a fill has to
+consume before it reaches a given order. FIFO is what NQ outrights use
+(`match_algorithm` 'F'); a pro-rata product has no single queue position, and the
+book does not check which it was handed. The invariant harness was written
+against deliberately broken books before the book existed; `Book` runs it
+unchanged.
 
 The hard part is what a modify does to priority. A price change or a size
 increase queues at the tail, and a size that shrinks or holds keeps its place.
 An iceberg refreshing its displayed tranche breaks that, because it looks
 identical in aggregate to a shrink and still queues at the tail. The fill in
 front of the M separates the two: after an F, the M keeps priority only if its
-size is exactly what the fill left behind. A level total is the same either way, so no aggregate view
-can falsify that rule and the `mbp-10` diff will not settle it. Only fill
-ordering can.
-
-This is the reference implementation, with obvious containers and no attempt
-at speed, meant to survive the fast book as the oracle that one is
-differentially tested against. So it never repairs itself quietly: `verify()`
-recomputes every level total from its queue and throws on any disagreement,
-and the tests run it after every record. Invariants were written and tested against deliberately
-broken books in `tests/toy_book.hpp` before the book existed; `Book` now runs
-the same harness unchanged.
+size is exactly what the fill left behind. A level total is the same either
+way, so no aggregate view can falsify that rule and the `mbp-10` diff will not
+settle it. Only fill ordering can.
 
 The crossed-book invariant is checked per instrument, and only while the status
 schema says that instrument is trading. The venue reports a mid-session halt as
-a pre-open carrying a market-event reason rather than as a halt action — NQ did
-exactly that for five seconds on 2026-08-25 — so `is_trading` decides and the
-action only names which non-trading state it was. `book_check` merges the two
-schemas on `ts_event` and reproduces the before and after: 2026-08-26 goes from
-504 crossed boundaries with the state pinned to Trading to 0 once gated, 593 of
-its 18,747,347 boundaries excluded as pre-open or closed; 2026-08-25 from 2,476
-to 0, with 2,273 of its 2,621 excluded boundaries inside that halt. All five
-days from 2026-08-24 to 28 pass with every counter reconciling.
+a pre-open carrying a market-event reason rather than as a halt action; NQ did
+exactly that for five seconds on 2026-08-25. So `is_trading` decides, not the
+action, and `book_check` merges the two schemas on `ts_event`: gating takes
+2026-08-26 from 504 crossed boundaries to 0, and all five days from 2026-08-24
+to 28 pass with every counter reconciling.
+
+## Instruments
+
+`InstrumentCatalog` reads the `definition` schema, which publishes a tick size
+per instrument. The NQ parent pull for 2026-08-24 to 28 carries outrights at
+0.25 and calendar spreads at 0.05, and delivers each spread as one record per
+leg under the spread's own id. The catalog collapses those legs into one
+instrument, takes outright or spread from the venue's `instrument_class` rather
+than inferring it from the leg count, and hands out each instrument's
+`TickScale`. One tick typed by hand cannot serve both: 20 ticks is 5.00 on NQU6
+at 0.25 and 1.00 on NQU6-NQZ6 at 0.05.
+
+`book_check --definition` checks every priced record against its own
+instrument's increment, and fails the run on one the catalog cannot place at
+all. On 2026-08-26 all 19,804,343 priced records sit on their instrument's grid;
+re-encode that day's definition file with 0.25 as the spread tick and the same
+run fails on 37,327. The check reads one way only: too coarse an increment
+fails, while one that divides the true increment leaves every price on grid. All
+five days hold 22 instruments, 12 outrights and 10 spreads, none off grid.
 
 ## Build
 
@@ -132,8 +135,9 @@ ctest --preset debug
 ```
 
 The Python extension is off by default, since it needs a Python development
-environment the library does not. It exposes `submit`, `cancel`, `advance_to`
-and fills, and nothing else.
+environment the library does not. It binds order entry and cancellation,
+`advance_to` and its fills, the order and statistics views, `load_ticks` and
+`naked_window_scan`. `InstrumentCatalog` is not bound.
 
 ```sh
 pip install pytest
@@ -142,39 +146,32 @@ cmake --build build
 ctest --test-dir build -L python
 ```
 
-CI builds GCC, Clang and MSVC with warnings as errors, runs the suite under ASan
-and UBSan, builds the Python module on Linux and Windows, and runs both oracles.
+CI builds GCC and Clang on Linux, AppleClang on macOS and MSVC on Windows, all
+with warnings as errors, runs the suite under ASan and UBSan, builds the Python
+module on Linux and Windows, and runs both oracles.
 
-## Market data is not in this repository
+## Corpus
 
-No `.dbn`, `.dbn.zst` or derived market data file is ever committed; a public
-repo may not redistribute a licensed CME window. Reproducing the validation needs
-your own Databento account, so the corpus is specified instead of shipped:
+Every number here was measured on one pull, which a Databento account
+reproduces:
 
 | | |
 |---|---|
 | Dataset | `GLBX.MDP3` |
 | Schemas | `mbo`, `mbp-10`, `definition`, `status` |
-| Symbology | continuous, `MNQ.v.0`, not `.c.0`, which returns the wrong contract during roll weeks |
-| Window | always from `00:00 UTC`; a book can only be rebuilt from a snapshot boundary |
+| Symbology | parent, `NQ.FUT`: every outright and every calendar spread in one pull |
+| Window | 2026-08-24 to 28, from `00:00 UTC`; a book can only be rebuilt from a snapshot boundary |
 | Delivery | batch download |
 
-Two things to watch. Databento renormalized GLBX.MDP3 on 2026-08-08,
-retroactively across all history, so files pulled before and after that date
-differ semantically and must not be mixed; record the pull date in the path. And
-billing is on *uncompressed* bytes: MBO is 56 B per record, so cost is the record
-count times 56 B no matter how small the `.zst` turns out to be.
+Databento renormalized GLBX.MDP3 on 2026-08-08, retroactively across all
+history, so files pulled before and after that date differ semantically and must
+not be mixed; record the pull date in the path.
 
-Verification will come from SHA-256 digests of book state at every event
-boundary, so anyone holding the same pull can check the reconstruction without
-the data itself being shared. Those digests are not published yet.
-
-`tests/data` is the one apparent exception: about 5 KB of Databento's own test
-vectors, Apache-2.0 and vendored unmodified so the decoder tests are hermetic.
-Some carry real bytes, so the right to redistribute rests on Databento's licence
-grant, not on the content being synthetic. Provenance and SHA-256 digests are in
-`tests/data`.
+The `.dbn` files under `tests/data` are Databento's own test vectors, Apache-2.0
+and vendored unmodified so the decoder tests run offline; see
+`tests/data/NOTICE`. No licensed window is committed.
 
 ## Licence
 
-Not yet chosen.
+MIT; see `LICENSE`. The vendored fixtures in `tests/data` stay under Databento's
+Apache-2.0 grant; see `tests/data/NOTICE`.

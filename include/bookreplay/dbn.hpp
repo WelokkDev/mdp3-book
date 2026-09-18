@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
+#include <string_view>
 #include <type_traits>
 
 namespace bookreplay {
@@ -37,6 +38,11 @@ inline constexpr std::uint8_t kRTypeMbp10 = 0x0A;
 inline constexpr std::uint8_t kRTypeStatus = 0x12;
 inline constexpr std::uint8_t kRTypeInstrumentDef = 0x13;
 inline constexpr std::uint8_t kRTypeMbo = 0xA0;
+
+inline constexpr std::uint16_t kSchemaMbo = 0;
+inline constexpr std::uint16_t kSchemaTrades = 4;
+inline constexpr std::uint16_t kSchemaDefinition = 9;
+inline constexpr std::uint16_t kSchemaStatus = 11;
 
 inline constexpr std::uint8_t kSupportedDbnVersion = 3;
 
@@ -67,6 +73,20 @@ enum class Side : char {
   kNone = 'N',
 };
 
+enum class InstrumentClass : char {
+  kBond = 'B',
+  kCall = 'C',
+  kFuture = 'F',
+  kIndex = 'I',
+  kStock = 'K',
+  kMixedSpread = 'M',
+  kPut = 'P',
+  kFutureSpread = 'S',
+  kOptionSpread = 'T',
+  kFxSpot = 'X',
+  kCommoditySpot = 'Y',
+};
+
 [[nodiscard]] constexpr bool mutates_book(Action a) noexcept {
   return a == Action::kAdd || a == Action::kCancel || a == Action::kModify || a == Action::kClear;
 }
@@ -77,6 +97,16 @@ enum class Side : char {
 
 [[nodiscard]] constexpr bool is_known_side(char c) noexcept {
   return c == 'B' || c == 'A' || c == 'N';
+}
+
+[[nodiscard]] constexpr bool is_known_instrument_class(char c) noexcept {
+  return c == 'B' || c == 'C' || c == 'F' || c == 'I' || c == 'K' || c == 'M' || c == 'P' ||
+         c == 'S' || c == 'T' || c == 'X' || c == 'Y';
+}
+
+[[nodiscard]] constexpr bool is_spread(InstrumentClass c) noexcept {
+  return c == InstrumentClass::kMixedSpread || c == InstrumentClass::kFutureSpread ||
+         c == InstrumentClass::kOptionSpread;
 }
 
 /// Leads every DBN record regardless of schema.
@@ -319,14 +349,23 @@ static_assert(offsetof(InstrumentDefMsg, expiration) == 40);
 static_assert(offsetof(InstrumentDefMsg, raw_instrument_id) == 112);
 static_assert(offsetof(InstrumentDefMsg, leg_price) == 120);
 static_assert(offsetof(InstrumentDefMsg, inst_attrib_value) == 136);
+static_assert(offsetof(InstrumentDefMsg, leg_instrument_id) == 188);
+static_assert(offsetof(InstrumentDefMsg, leg_underlying_id) == 208);
 static_assert(offsetof(InstrumentDefMsg, appl_id) == 212);
+static_assert(offsetof(InstrumentDefMsg, leg_count) == 220);
+static_assert(offsetof(InstrumentDefMsg, leg_index) == 222);
 static_assert(offsetof(InstrumentDefMsg, currency) == 224);
 static_assert(offsetof(InstrumentDefMsg, raw_symbol) == 238);
 static_assert(offsetof(InstrumentDefMsg, asset) == 335);
 static_assert(offsetof(InstrumentDefMsg, leg_raw_symbol) == 416);
 static_assert(offsetof(InstrumentDefMsg, instrument_class) == 487);
+static_assert(offsetof(InstrumentDefMsg, leg_instrument_class) == 501);
 static_assert(offsetof(InstrumentDefMsg, leg_side) == 502);
 static_assert(offsetof(InstrumentDefMsg, reserved) == 503);
+
+inline constexpr char kSecurityUpdateAdd = 'A';
+inline constexpr char kSecurityUpdateModify = 'M';
+inline constexpr char kSecurityUpdateDelete = 'D';
 
 /// The largest record layout this decoder knows, `ts_out` extension included.
 /// Not a ceiling: a record may declare a longer length, and the declared
@@ -425,6 +464,10 @@ template <typename T>
   return static_cast<Side>(r.side);
 }
 
+[[nodiscard]] constexpr InstrumentClass instrument_class_of(const InstrumentDefMsg& r) noexcept {
+  return static_cast<InstrumentClass>(r.instrument_class);
+}
+
 [[nodiscard]] constexpr bool has_flag(const MboMsg& r, std::uint8_t flag) noexcept {
   return (r.flags & flag) != 0;
 }
@@ -439,9 +482,18 @@ template <typename T>
   return price == kUndefPrice;
 }
 
+/// Fixed-width DBN strings are NUL-padded; one with no NUL views as its whole
+/// width.
+template <std::size_t N>
+[[nodiscard]] constexpr std::string_view cstr_view(const std::array<char, N>& field) noexcept {
+  const std::string_view whole{field.data(), field.size()};
+  return whole.substr(0, whole.find('\0'));
+}
+
 [[nodiscard]] bool is_supported_dbn_version(std::uint8_t version) noexcept;
 [[nodiscard]] const char* action_name(Action a) noexcept;
 [[nodiscard]] const char* side_name(Side s) noexcept;
+[[nodiscard]] const char* instrument_class_name(InstrumentClass c) noexcept;
 
 }  // namespace bookreplay
 

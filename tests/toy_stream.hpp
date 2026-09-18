@@ -1,4 +1,5 @@
-// Hand-built MBO streams, and the status records that gate them.
+// Hand-built MBO streams, the status records that gate them, and the
+// definition records that say what each instrument is.
 //
 // Shapes here are copied from what a real GLBX.MDP3 file actually contains,
 // not from what the format permits. The snapshot preamble in particular
@@ -12,7 +13,10 @@
 #include "bookreplay/dbn.hpp"
 
 #include <cstdint>
+#include <string_view>
 #include <vector>
+
+#include "dbn_encoder.hpp"
 
 namespace bookreplay::testing {
 
@@ -21,11 +25,72 @@ inline constexpr std::int64_t kOne = kPriceScale;
 /// MNQ/NQ tick: 0.25.
 inline constexpr std::int64_t kTick = kPriceScale / 4;
 
+/// NQ calendar spread tick: 0.05.
+inline constexpr std::int64_t kSpreadTick = kPriceScale / 20;
+
 [[nodiscard]] constexpr std::int64_t px(std::int64_t whole, std::int64_t ticks = 0) {
   return whole * kOne + ticks * kTick;
 }
 
 inline constexpr std::uint64_t kBaseTs = 1'785'888'000'000'000'000ULL;  // 2026-08-05T00:00:00Z
+
+inline constexpr std::uint64_t kSeptemberExpiry = 1'789'738'200'000'000'000ULL;  // NQU6
+inline constexpr std::uint64_t kDecemberExpiry = 1'797'604'200'000'000'000ULL;   // NQZ6
+
+/// An outright as the NQ.FUT definition pull delivers one: sent before the
+/// file's window opens, and received in the batch at its start.
+[[nodiscard]] inline InstrumentDefMsg outright(std::uint32_t instrument_id,
+                                               std::string_view raw_symbol,
+                                               std::int64_t tick = kTick,
+                                               std::uint64_t expiration = kSeptemberExpiry) {
+  InstrumentDefMsg r{};
+  r.hd.length = kLengthUnits<InstrumentDefMsg>;
+  r.hd.rtype = kRTypeInstrumentDef;
+  r.hd.publisher_id = 1;
+  r.hd.instrument_id = instrument_id;
+  r.hd.ts_event = kBaseTs - 43'200'000'000'000;
+  r.ts_recv = kBaseTs;
+  r.min_price_increment = tick;
+  r.display_factor = 10'000'000;
+  r.expiration = expiration;
+  r.activation = 1'742'563'800'000'000'000ULL;  // 2025-03-21T13:30:00Z
+  r.raw_instrument_id = instrument_id;
+  r.market_depth = 10;
+  r.tick_rule = 255;
+  set_cstr(r.currency, "USD");
+  set_cstr(r.raw_symbol, raw_symbol);
+  set_cstr(r.exchange, "XCME");
+  set_cstr(r.asset, "NQ");
+  set_cstr(r.cfi, "FFIXSX");
+  r.instrument_class = static_cast<char>(InstrumentClass::kFuture);
+  r.match_algorithm = 'F';
+  r.security_update_action = kSecurityUpdateAdd;
+  r.leg_side = static_cast<char>(Side::kNone);
+  return r;
+}
+
+/// The pull delivers each NQ calendar spread as one of these per leg, every one
+/// under the spread's own id and carrying the spread's increment, not the leg's.
+[[nodiscard]] inline InstrumentDefMsg spread_leg(std::uint32_t instrument_id,
+                                                 std::string_view raw_symbol,
+                                                 std::uint16_t leg_index,
+                                                 std::uint32_t leg_instrument_id,
+                                                 std::string_view leg_raw_symbol, Side leg_side,
+                                                 std::int64_t tick = kSpreadTick) {
+  InstrumentDefMsg r = outright(instrument_id, raw_symbol, tick);
+  r.instrument_class = static_cast<char>(InstrumentClass::kFutureSpread);
+  set_cstr(r.cfi, "FMIXSX");
+  set_cstr(r.secsubtype, "EQ");
+  r.leg_count = 2;
+  r.leg_index = leg_index;
+  r.leg_instrument_id = leg_instrument_id;
+  r.leg_ratio_qty_numerator = 1;
+  r.leg_ratio_qty_denominator = 1;
+  set_cstr(r.leg_raw_symbol, leg_raw_symbol);
+  r.leg_instrument_class = static_cast<char>(InstrumentClass::kFuture);
+  r.leg_side = static_cast<char>(leg_side);
+  return r;
+}
 
 /// One status record. `is_trading` is a parameter of its own rather than
 /// something derived from the action, because the venue sets the two

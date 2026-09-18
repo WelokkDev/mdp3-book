@@ -1,3 +1,5 @@
+#include "bookreplay/dbn_reader.hpp"
+#include "bookreplay/definition.hpp"
 #include "bookreplay/naked_window.hpp"
 #include "bookreplay/order.hpp"
 #include "bookreplay/replay.hpp"
@@ -21,8 +23,8 @@ using namespace bookreplay;
 
 struct Options {
   std::string path;
+  std::string definition_path;
   std::string orders_path;
-  std::int64_t tick_size = 0;
   std::int64_t entry_ns = -1;
   std::int64_t arm_ns = -1;
   std::int64_t cancel_ns = -1;
@@ -39,8 +41,8 @@ struct Options {
 int usage() {
   std::fprintf(
       stderr,
-      "usage: replay_demo FILE.dbn[.zst] --tick-size N --entry-ns N --arm-ns N\n"
-      "                   --cancel-ns N [--instrument N] [--orders FILE.tsv]\n"
+      "usage: replay_demo FILE.dbn[.zst] --definition FILE.dbn[.zst] --instrument N\n"
+      "                   --entry-ns N --arm-ns N --cancel-ns N [--orders FILE.tsv]\n"
       "                   [--reserve-fills N] [--full-remaining] [--both-sides] [--stats]\n"
       "                   [--sweep-entry-ns a,b,c | --naked-window --stop-ticks N]\n"
       "\n"
@@ -199,15 +201,29 @@ std::vector<Order> read_orders(const std::string& path) {
   return orders;
 }
 
+const InstrumentDefinition& definition_of(const InstrumentCatalog& catalog,
+                                          std::uint32_t instrument_id) {
+  if (const InstrumentDefinition* def = catalog.find(instrument_id)) {
+    return *def;
+  }
+  std::string defined;
+  for (const std::uint32_t id : catalog.instruments()) {
+    defined += defined.empty() ? "; it defines " : ", ";
+    defined += std::to_string(id) + " " + catalog.at(id).raw_symbol;
+  }
+  throw DefinitionError("instrument " + std::to_string(instrument_id) +
+                        " is not in the definition file" +
+                        (defined.empty() ? std::string{", which defines nothing"} : defined));
+}
+
 std::unique_ptr<TradeSource> open_source(const Options& opts) {
   TradeSourceOptions source_opts;
   source_opts.instrument_id = opts.instrument_id;
   return std::make_unique<DbnTradeSource>(std::filesystem::path{opts.path}, source_opts);
 }
 
-ReplayConfig make_config(const Options& opts, std::int64_t entry_ns) {
-  ReplayConfig config{.latency = Latency{entry_ns, opts.arm_ns, opts.cancel_ns},
-                      .scale = TickScale{opts.tick_size}};
+ReplayConfig make_config(const Options& opts, TickScale scale, std::int64_t entry_ns) {
+  ReplayConfig config{.latency = Latency{entry_ns, opts.arm_ns, opts.cancel_ns}, .scale = scale};
   config.reserve_fills_per_advance = opts.reserve_fills;
   if (opts.full_remaining) {
     config.fill_size = FillSizePolicy::kFullRemaining;
@@ -267,10 +283,10 @@ void print_replay_stats(const ReplayStats& r, const char* label) {
   row("reallocations", r.reallocations);
 }
 
-std::vector<Fill> run_once(const Options& opts, std::int64_t entry_ns,
+std::vector<Fill> run_once(const Options& opts, TickScale scale, std::int64_t entry_ns,
                            std::unique_ptr<TradeSource> source, const std::vector<Order>& orders,
                            bool report_stats) {
-  Replay replay{std::move(source), make_config(opts, entry_ns)};
+  Replay replay{std::move(source), make_config(opts, scale, entry_ns)};
   for (const Order& o : orders) {
     replay.submit(o);
   }
@@ -283,7 +299,7 @@ std::vector<Fill> run_once(const Options& opts, std::int64_t entry_ns,
   return out;
 }
 
-int run_sweep(const Options& opts, const std::vector<Order>& orders) {
+int run_sweep(const Options& opts, TickScale scale, const std::vector<Order>& orders) {
   std::unique_ptr<TradeSource> source = open_source(opts);
   const std::vector<Tick> day = collect(*source);
   std::fprintf(stderr, "decoded %zu prints once for %zu latency points\n", day.size(),
@@ -294,7 +310,7 @@ int run_sweep(const Options& opts, const std::vector<Order>& orders) {
 
   std::printf("entry_ns\tfills\tfilled_qty\tfirst_fill_ts\tlast_fill_ts\n");
   for (const std::int64_t entry_ns : opts.sweep) {
-    Replay replay{std::make_unique<TickSpanSource>(day), make_config(opts, entry_ns)};
+    Replay replay{std::make_unique<TickSpanSource>(day), make_config(opts, scale, entry_ns)};
     for (const Order& o : orders) {
       replay.submit(o);
     }
@@ -316,7 +332,18 @@ int run_sweep(const Options& opts, const std::vector<Order>& orders) {
   return 0;
 }
 
-int run_naked_window(const Options& opts, const std::vector<Fill>& fills) {
+/// `distance` is positive, which keeps both bounds from overflowing.
+[[nodiscard]] std::int64_t stop_price(const Fill& entry, std::int64_t distance) {
+  constexpr std::int64_t kWireLimit = kUndefPrice - 1;
+  const bool is_long = entry.side == Side::kBid;
+  if (is_long ? entry.price < distance - kWireLimit : entry.price > kWireLimit - distance) {
+    throw ReplayError("the stop does not fit a wire price");
+  }
+  return is_long ? entry.price - distance : entry.price + distance;
+}
+
+int run_naked_window(const Options& opts, TickScale scale, const std::vector<Fill>& fills) {
+  const std::int64_t stop_distance = scale.to_price(opts.stop_ticks);
   std::vector<NakedWindowQuery> queries;
   queries.reserve(fills.size());
   for (const Fill& f : fills) {
@@ -325,20 +352,23 @@ int run_naked_window(const Options& opts, const std::vector<Fill>& fills) {
     q.window_ns = opts.arm_ns;
     q.entry_price = f.price;
     q.position_side = f.side;
-    q.stop_price = f.side == Side::kBid ? f.price - opts.stop_ticks * opts.tick_size
-                                        : f.price + opts.stop_ticks * opts.tick_size;
+    q.stop_price = stop_price(f, stop_distance);
     queries.push_back(q);
   }
 
   std::unique_ptr<TradeSource> source = open_source(opts);
-  NakedWindowScan scan{TickScale{opts.tick_size}, queries.size() + 1};
+  NakedWindowScan scan{scale, queries.size() + 1};
   const std::vector<NakedWindowResult> results = scan.run(*source, queries);
 
-  std::printf("entry_ts\twindow_end\tticks\tvolume\tstop_reached\tfirst_reach_ts\tmae_ticks\n");
+  std::printf(
+      "entry_ts\tentry_price\tstop_price\twindow_end\tticks\tvolume\tstop_reached\tfirst_reach_ts\t"
+      "mae_ticks\n");
   for (std::size_t i = 0; i < results.size(); ++i) {
     const NakedWindowResult& r = results[i];
-    std::printf("%lld\t%lld\t%llu\t%llu\t%d\t%lld\t%lld\n",
+    std::printf("%lld\t%lld\t%lld\t%lld\t%llu\t%llu\t%d\t%lld\t%lld\n",
                 static_cast<long long>(queries[i].entry_fill_ts),
+                static_cast<long long>(queries[i].entry_price),
+                static_cast<long long>(queries[i].stop_price),
                 static_cast<long long>(r.window_end_ns), static_cast<unsigned long long>(r.ticks),
                 static_cast<unsigned long long>(r.volume), r.stop_reached ? 1 : 0,
                 static_cast<long long>(r.stop_reached ? r.first_reach_ts : 0),
@@ -359,10 +389,8 @@ int main(int argc, char** argv) {
   for (int i = 2; i < argc; ++i) {
     const std::string arg = argv[i];
     const bool has_value = i + 1 < argc;
-    if (arg == "--tick-size" && has_value) {
-      if (!parse_i64(argv[++i], opts.tick_size)) {
-        return usage();
-      }
+    if (arg == "--definition" && has_value) {
+      opts.definition_path = argv[++i];
     } else if (arg == "--entry-ns" && has_value) {
       if (!parse_i64(argv[++i], opts.entry_ns)) {
         return usage();
@@ -408,7 +436,13 @@ int main(int argc, char** argv) {
     }
   }
 
-  if (opts.tick_size <= 0 || opts.entry_ns < 0 || opts.arm_ns < 0 || opts.cancel_ns < 0) {
+  if (opts.definition_path.empty() || opts.instrument_id == kAnyInstrument) {
+    std::fprintf(stderr,
+                 "replay_demo: --definition and --instrument are both required; the tick comes "
+                 "from the catalog\n");
+    return usage();
+  }
+  if (opts.entry_ns < 0 || opts.arm_ns < 0 || opts.cancel_ns < 0) {
     return usage();
   }
   if (!opts.sweep.empty() && opts.naked_window) {
@@ -425,18 +459,28 @@ int main(int argc, char** argv) {
   }
 
   try {
+    DbnReader definitions{std::filesystem::path{opts.definition_path}};
+    require_definitions_for(definitions.metadata(),
+                            DbnReader{std::filesystem::path{opts.path}}.metadata());
+    const InstrumentCatalog catalog = read_definitions(definitions);
+    const InstrumentDefinition& instrument = definition_of(catalog, opts.instrument_id);
+    const TickScale scale = instrument.tick_scale();
+    std::fprintf(stderr, "instrument %u %s %s tick %lld\n", instrument.instrument_id,
+                 instrument.raw_symbol.c_str(), instrument_class_name(instrument.instrument_class),
+                 static_cast<long long>(scale.tick_size()));
+
     const std::vector<Order> orders =
         opts.orders_path.empty() ? std::vector<Order>{} : read_orders(opts.orders_path);
 
     if (!opts.sweep.empty()) {
-      return run_sweep(opts, orders);
+      return run_sweep(opts, scale, orders);
     }
 
     const std::vector<Fill> fills =
-        run_once(opts, opts.entry_ns, open_source(opts), orders, opts.stats);
+        run_once(opts, scale, opts.entry_ns, open_source(opts), orders, opts.stats);
 
     if (opts.naked_window) {
-      return run_naked_window(opts, fills);
+      return run_naked_window(opts, scale, fills);
     }
     if (!orders.empty()) {
       print_fill_header();
