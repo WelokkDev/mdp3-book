@@ -40,6 +40,7 @@ inline constexpr std::uint8_t kRTypeInstrumentDef = 0x13;
 inline constexpr std::uint8_t kRTypeMbo = 0xA0;
 
 inline constexpr std::uint16_t kSchemaMbo = 0;
+inline constexpr std::uint16_t kSchemaMbp10 = 2;
 inline constexpr std::uint16_t kSchemaTrades = 4;
 inline constexpr std::uint16_t kSchemaDefinition = 9;
 inline constexpr std::uint16_t kSchemaStatus = 11;
@@ -460,6 +461,10 @@ template <typename T>
   return static_cast<Action>(r.action);
 }
 
+[[nodiscard]] constexpr Action action_of(const Mbp10Msg& r) noexcept {
+  return static_cast<Action>(r.action);
+}
+
 [[nodiscard]] constexpr Side side_of(const MboMsg& r) noexcept {
   return static_cast<Side>(r.side);
 }
@@ -469,6 +474,10 @@ template <typename T>
 }
 
 [[nodiscard]] constexpr bool has_flag(const MboMsg& r, std::uint8_t flag) noexcept {
+  return (r.flags & flag) != 0;
+}
+
+[[nodiscard]] constexpr bool has_flag(const Mbp10Msg& r, std::uint8_t flag) noexcept {
   return (r.flags & flag) != 0;
 }
 

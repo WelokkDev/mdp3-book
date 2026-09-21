@@ -287,6 +287,16 @@ const Book::Level* Book::level(std::uint32_t instrument_id, Side side, std::int6
   return b == nullptr ? nullptr : find_level(*b, side, price);
 }
 
+const Book::Bids* Book::bids(std::uint32_t instrument_id) const {
+  const Instrument* b = find(instrument_id);
+  return b == nullptr ? nullptr : &b->bids;
+}
+
+const Book::Asks* Book::asks(std::uint32_t instrument_id) const {
+  const Instrument* b = find(instrument_id);
+  return b == nullptr ? nullptr : &b->asks;
+}
+
 std::uint64_t Book::queue_ahead(std::uint32_t instrument_id, std::uint64_t order_id) const {
   const Instrument* b = find(instrument_id);
   if (b == nullptr) {

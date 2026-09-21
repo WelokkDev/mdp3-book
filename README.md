@@ -4,8 +4,9 @@ CME MDP 3.0 limit order book reconstruction from Databento DBN.
 
 **Work in progress.** The decoder, invariant harness, trades-only replay
 driver, order-by-order book and instrument catalog are built and tested, and the
-book replays five real trading days with every invariant holding. The book has
-not been diffed against `mbp-10`, and nothing fills against it.
+book replays five real trading days with every invariant holding and its top ten
+levels matching the venue's own `mbp-10` at every event boundary. Nothing fills
+against it.
 
 ## Why
 
@@ -15,8 +16,8 @@ a bar has no queue.
 
 Rebuilding a book from market-by-order is easy to do approximately and hard to
 know you got right. The check is the venue's own top-ten snapshot: match
-`mbp-10` at every event boundary across a real day and there is nothing left to
-argue about.
+`mbp-10` at every event boundary across a real day and the aggregate is no
+longer in question. The queue inside it still is.
 
 ## Decoder
 
@@ -102,6 +103,29 @@ exactly that for five seconds on 2026-08-25. So `is_trading` decides, not the
 action, and `book_check` merges the two schemas on `ts_event`: gating takes
 2026-08-26 from 504 crossed boundaries to 0, and all five days from 2026-08-24
 to 28 pass with every counter reconciling.
+
+## Depth
+
+`book_diff` replays a day of `mbo` into `Book` and compares its top ten levels
+per side against the venue's own `mbp-10` at every event boundary: a price, a
+size and an order count per level, sixty values a comparison. The counts are
+what make it more than a ladder check, since one order and two orders of the
+same total size differ only there.
+
+Across 2026-08-24 to 28, outrights and calendar spreads, inside and outside
+trading hours, all 101,474,627 comparisons agree, as do 1,844,195 trade records
+and the 40 opening snapshots: every one of the 103,318,862 `mbp-10` records in
+the pull. The other 14,769,811 boundaries are checked too. The venue publishes
+whenever the top ten moves, so a book that moves while the venue is quiet fails.
+
+The trap is alignment. A record's key is not unique, because one packet can
+carry two events for one instrument with identical timestamps, and matching on
+it alone invents divergences millions of records in. The record settles whose
+it is: its action, price and size are those of the last add, cancel or modify
+in the event it closes, on every record in the five days.
+
+What this cannot see is queue order. Force `Book::modify` to always re-queue
+and `book_diff` prints byte-identical output on all five days.
 
 ## Instruments
 

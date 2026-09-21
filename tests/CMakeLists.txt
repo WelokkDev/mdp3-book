@@ -18,6 +18,7 @@ add_executable(bookreplay_tests
   test_dbn_roundtrip.cpp
   test_definition.cpp
   test_invariants.cpp
+  test_mbp10_diff.cpp
   test_naked_window.cpp
   test_order.cpp
   test_replay.cpp

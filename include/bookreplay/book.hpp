@@ -124,6 +124,12 @@ class Book {
   [[nodiscard]] const Level* level(std::uint32_t instrument_id, Side side,
                                    std::int64_t price) const;
 
+  /// Every level on one side, best first, or nullptr if the instrument holds
+  /// no book. The pointer is good only until the next `apply()` or `reset()`,
+  /// which may drop the instrument.
+  [[nodiscard]] const Bids* bids(std::uint32_t instrument_id) const;
+  [[nodiscard]] const Asks* asks(std::uint32_t instrument_id) const;
+
   /// Resting quantity ahead of `order_id` in its own level: what a fill has
   /// to consume before reaching it. 0 at the front of the queue,
   /// `kNoQueuePosition` if the order is not resting.
