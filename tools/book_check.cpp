@@ -9,11 +9,9 @@
 #include "bookreplay/invariants.hpp"
 
 #include <algorithm>
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <filesystem>
 #include <iterator>
 #include <limits>
@@ -23,9 +21,12 @@
 #include <unordered_map>
 #include <vector>
 
+#include "cli.hpp"
+
 namespace {
 
 using namespace bookreplay;
+using namespace bookreplay::tools;
 
 /// `verify()` walks every resting order, so it is a periodic audit rather
 /// than a per-record one.
@@ -46,15 +47,6 @@ int usage() {
       "                  [--definition FILE.dbn[.zst]] [--period N] [--limit N]\n",
       stderr);
   return 2;
-}
-
-bool parse_u64(const char* text, std::uint64_t& out) {
-  if (text[0] == '-') {  // strtoull wraps a negative rather than refusing it
-    return false;
-  }
-  char* end = nullptr;
-  out = std::strtoull(text, &end, 10);
-  return end != text && *end == '\0';
 }
 
 /// Without this, the next day's status file merges without complaint: it opens
@@ -208,26 +200,6 @@ void count_instruments(const InstrumentCatalog& catalog, const std::set<std::uin
          (!definitions ||
           (definitions->misaligned_prices == 0 && definitions->prices_without_definition == 0 &&
            definitions->catalog_instruments_missing_legs == 0));
-}
-
-void row(std::string& out, const char* key, std::uint64_t value) {
-  out += key;
-  out += '\t';
-  out += std::to_string(value);
-  out += '\n';
-}
-
-/// `HH:MM:SS.nnnnnnnnn` UTC. Which day it is, is the file name's job.
-std::string time_of_day(std::uint64_t ts_ns) {
-  const std::uint64_t second = ts_ns / 1'000'000'000;
-  const std::uint64_t in_day = second % 86'400;
-  std::array<char, 32> buf{};
-  std::snprintf(buf.data(), buf.size(), "%02llu:%02llu:%02llu.%09llu",
-                static_cast<unsigned long long>(in_day / 3600),
-                static_cast<unsigned long long>((in_day / 60) % 60),
-                static_cast<unsigned long long>(in_day % 60),
-                static_cast<unsigned long long>(ts_ns % 1'000'000'000));
-  return std::string{buf.data()};
 }
 
 /// Only the first violation's neighbourhood is captured, so only those
@@ -444,11 +416,9 @@ int main(int argc, char** argv) {
     } else if (arg == "--definition" && has_value) {
       opts.definition_path = argv[++i];
     } else if (arg == "--period" && has_value) {
-      std::uint64_t value = 0;
-      if (!parse_u64(argv[++i], value) || value > std::numeric_limits<std::uint32_t>::max()) {
+      if (!parse_u32(argv[++i], opts.period)) {
         return usage();
       }
-      opts.period = static_cast<std::uint32_t>(value);
     } else if (arg == "--limit" && has_value) {
       if (!parse_u64(argv[++i], opts.limit)) {
         return usage();

@@ -11,15 +11,17 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
 
+#include "cli.hpp"
+
 namespace {
 
 using namespace bookreplay;
+using namespace bookreplay::tools;
 
 struct Options {
   std::string path;
@@ -59,25 +61,6 @@ bool parse_i64(const char* text, std::int64_t& out) {
   char* end = nullptr;
   out = std::strtoll(text, &end, 10);
   return end != text && *end == '\0' && errno == 0;
-}
-
-bool parse_u64(const char* text, std::uint64_t& out) {
-  if (text[0] == '-') {  // strtoull wraps a negative rather than refusing it
-    return false;
-  }
-  errno = 0;
-  char* end = nullptr;
-  out = std::strtoull(text, &end, 10);
-  return end != text && *end == '\0' && errno == 0;
-}
-
-bool parse_u32(const char* text, std::uint32_t& out) {
-  std::uint64_t value = 0;
-  if (!parse_u64(text, value) || value > std::numeric_limits<std::uint32_t>::max()) {
-    return false;
-  }
-  out = static_cast<std::uint32_t>(value);
-  return true;
 }
 
 bool parse_list(const char* text, std::vector<std::int64_t>& out) {
