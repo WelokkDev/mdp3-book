@@ -468,6 +468,23 @@ TEST(Reporting, ViolationListIsCapped) {
   EXPECT_EQ(report.cross_violations, std::uint64_t{40});
 }
 
+TEST(Reporting, AZeroCapStillKeepsTheFirstViolationsContext) {
+  StreamBuilder b = testing::opening_snapshot();
+  for (std::uint64_t i = 0; i < 40; ++i) {
+    b.add(500 + i, Side::kAsk, px(28999, 0), 1).last();
+  }
+
+  ToyBook book;
+  InvariantHarness<ToyBook>::Options opts;
+  opts.max_violations = 0;
+  const auto report = run_checked(book, b.records(), SessionState::kTrading, opts);
+
+  EXPECT_TRUE(report.violations.empty());
+  EXPECT_EQ(report.cross_violations, std::uint64_t{40});
+  ASSERT_FALSE(report.first_violation_context.empty());
+  EXPECT_EQ(report.first_violation_context.back().order_id, std::uint64_t{500});
+}
+
 TEST(Reporting, RecordCountMatchesTheStream) {
   const auto records = testing::iceberg_then_market_moves_up();
   ToyBook book;

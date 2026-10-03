@@ -8,6 +8,7 @@
 #define BOOKREPLAY_MBP10_DIFF_HPP
 
 #include "bookreplay/book.hpp"
+#include "bookreplay/context_ring.hpp"
 #include "bookreplay/dbn.hpp"
 
 #include <array>
@@ -227,7 +228,7 @@ class Mbp10Diff {
   void after(const MboMsg& rec) {
     ++report_.records;
     record_index_ = report_.records - 1;
-    push_context(rec);
+    context_.push(rec);
 
     const bool snapshot = has_flag(rec, kFlagSnapshot);
     if (!snapshot) {
@@ -487,7 +488,7 @@ class Mbp10Diff {
     d.what = what;
     d.record_index = record_index_;
     if (report_.divergence_count == 0) {
-      ctx.records = context_records();
+      ctx.records = context_.items();
       ctx.last_record_index = report_.records == 0 ? 0 : report_.records - 1;
       report_.first_divergence = std::move(ctx);
     }
@@ -497,24 +498,6 @@ class Mbp10Diff {
     if (report_.divergences.size() < opts_.max_divergences) {
       report_.divergences.push_back(d);
     }
-  }
-
-  void push_context(const MboMsg& rec) {
-    ring_[ring_next_] = rec;
-    ring_next_ = (ring_next_ + 1) % kContextDepth;
-    if (ring_filled_ < kContextDepth) {
-      ++ring_filled_;
-    }
-  }
-
-  [[nodiscard]] std::vector<MboMsg> context_records() const {
-    std::vector<MboMsg> out;
-    out.reserve(ring_filled_);
-    const std::size_t start = (ring_next_ + kContextDepth - ring_filled_) % kContextDepth;
-    for (std::size_t i = 0; i < ring_filled_; ++i) {
-      out.push_back(ring_[(start + i) % kContextDepth]);
-    }
-    return out;
   }
 
   const Book* book_;
@@ -529,9 +512,7 @@ class Mbp10Diff {
   std::map<std::uint32_t, MboMsg> event_mutation_;
   std::uint64_t record_index_ = 0;
 
-  std::array<MboMsg, kContextDepth> ring_{};
-  std::size_t ring_next_ = 0;
-  std::size_t ring_filled_ = 0;
+  ContextRing<MboMsg, kContextDepth> context_;
 };
 
 }  // namespace bookreplay

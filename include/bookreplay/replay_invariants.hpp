@@ -1,10 +1,10 @@
 #ifndef BOOKREPLAY_REPLAY_INVARIANTS_HPP
 #define BOOKREPLAY_REPLAY_INVARIANTS_HPP
 
+#include "bookreplay/context_ring.hpp"
 #include "bookreplay/order.hpp"
 
 #include <algorithm>
-#include <array>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -84,9 +84,11 @@ struct ReplayInvariantReport {
   std::uint64_t causality_violations = 0;
   std::uint64_t attribution_violations = 0;
   std::uint64_t digest = kFnvOffset;
-  std::vector<ReplayViolation> violations;
+  std::vector<ReplayViolation> violations;  ///< capped by max_violations, unlike the counters
 
-  /// The first violation's fill and the fills preceding it, in order.
+  /// The fills leading up to the first violation, oldest first. It ends on the
+  /// offending fill only when a fill raised the violation; one raised from
+  /// order state names no fill.
   std::vector<Fill> first_violation_context;
 
   [[nodiscard]] bool ok() const noexcept {
@@ -163,7 +165,7 @@ class ReplayHarness {
 
   void check_fill(const Fill& f, std::int64_t target) {
     ++report_.fills;
-    push_context(f);
+    context_.push(f);
 
     if (f.seq <= last_seq_ || f.ts_ns < last_ts_ || f.ts_ns > target) {
       ++report_.monotone_violations;
@@ -299,27 +301,12 @@ class ReplayHarness {
   }
 
   void store(const ReplayViolation& v) {
-    if (report_.violations.empty()) {
-      capture_context();
+    if (!context_captured_) {
+      context_captured_ = true;
+      report_.first_violation_context = context_.items();
     }
     if (report_.violations.size() < opts_.max_violations) {
       report_.violations.push_back(v);
-    }
-  }
-
-  void push_context(const Fill& f) {
-    ring_[ring_next_] = f;
-    ring_next_ = (ring_next_ + 1) % kContextDepth;
-    if (ring_filled_ < kContextDepth) {
-      ++ring_filled_;
-    }
-  }
-
-  void capture_context() {
-    report_.first_violation_context.reserve(ring_filled_);
-    const std::size_t start = (ring_next_ + kContextDepth - ring_filled_) % kContextDepth;
-    for (std::size_t i = 0; i < ring_filled_; ++i) {
-      report_.first_violation_context.push_back(ring_[(start + i) % kContextDepth]);
     }
   }
 
@@ -332,9 +319,8 @@ class ReplayHarness {
   std::uint64_t last_seq_ = 0;
   std::int64_t last_ts_ = kNotStarted;
 
-  std::array<Fill, kContextDepth> ring_{};
-  std::size_t ring_next_ = 0;
-  std::size_t ring_filled_ = 0;
+  ContextRing<Fill, kContextDepth> context_;
+  bool context_captured_ = false;
 };
 
 }  // namespace bookreplay

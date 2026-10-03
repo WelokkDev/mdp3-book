@@ -278,6 +278,24 @@ TEST(Reporting, TheFirstViolationCarriesThePrecedingFills) {
   EXPECT_EQ(harness.report().first_violation_context.size(), std::size_t{1});
 }
 
+TEST(Reporting, AZeroCapStillKeepsTheFirstViolationsFills) {
+  const Latency latency{kMs + kMs / 2, 0, 0};
+  IgnoresEntryLatencyReplay driver{one_print(5), latency, TickScale{kTick}};
+  ReplayHarness<IgnoresEntryLatencyReplay>::Options opts;
+  opts.max_violations = 0;
+  ReplayHarness harness{driver, latency, opts};
+  for (OrderId id = 1; id <= 3; ++id) {
+    harness.submit(order_of(id, OrderType::kMarket, Side::kBid, 1));
+  }
+
+  EXPECT_EQ(harness.advance_to(kT0 + 10 * kMs).size(), std::size_t{3});
+  const ReplayInvariantReport& report = harness.report();
+  EXPECT_TRUE(report.violations.empty());
+  EXPECT_EQ(report.causality_violations, std::uint64_t{3});
+  ASSERT_EQ(report.first_violation_context.size(), std::size_t{1});
+  EXPECT_EQ(report.first_violation_context.front().order_id, OrderId{1});
+}
+
 TEST(Differential, TheEngineAndTheToyOracleAgreeOnRandomStreamsAndScripts) {
   std::mt19937_64 rng{0xB00CD1FFULL};
 

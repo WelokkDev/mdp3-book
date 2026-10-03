@@ -1,9 +1,9 @@
 #ifndef BOOKREPLAY_INVARIANTS_HPP
 #define BOOKREPLAY_INVARIANTS_HPP
 
+#include "bookreplay/context_ring.hpp"
 #include "bookreplay/dbn.hpp"
 
-#include <array>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -100,7 +100,7 @@ struct InvariantReport {
   std::uint64_t dematerializations = 0;  ///< violations: a T/F erased the order it names
   std::uint64_t unknown_order_fills = 0;
   std::uint64_t malformed_records = 0;
-  std::vector<Violation> violations;
+  std::vector<Violation> violations;  ///< capped by max_violations, unlike the counters
 
   /// The first violation's record and the records preceding it, in arrival
   /// order.
@@ -159,7 +159,7 @@ class InvariantHarness {
 
   void after(const MboMsg& rec) {
     ++report_.records;
-    push_context(rec);
+    context_.push(rec);
 
     check_well_formed(rec);
 
@@ -259,27 +259,12 @@ class InvariantHarness {
   void add(Invariant inv, const char* what, const MboMsg& rec) { store(make(inv, what, rec)); }
 
   void store(const Violation& v) {
-    if (report_.violations.empty()) {
-      capture_context();
+    if (!context_captured_) {
+      context_captured_ = true;
+      report_.first_violation_context = context_.items();
     }
     if (report_.violations.size() < opts_.max_violations) {
       report_.violations.push_back(v);
-    }
-  }
-
-  void push_context(const MboMsg& rec) {
-    ring_[ring_next_] = rec;
-    ring_next_ = (ring_next_ + 1) % kContextDepth;
-    if (ring_filled_ < kContextDepth) {
-      ++ring_filled_;
-    }
-  }
-
-  void capture_context() {
-    report_.first_violation_context.reserve(ring_filled_);
-    const std::size_t start = (ring_next_ + kContextDepth - ring_filled_) % kContextDepth;
-    for (std::size_t i = 0; i < ring_filled_; ++i) {
-      report_.first_violation_context.push_back(ring_[(start + i) % kContextDepth]);
     }
   }
 
@@ -292,9 +277,8 @@ class InvariantHarness {
   std::uint64_t pre_mutations_ = 0;
   bool pre_contained_ = false;
 
-  std::array<MboMsg, kContextDepth> ring_{};
-  std::size_t ring_next_ = 0;
-  std::size_t ring_filled_ = 0;
+  ContextRing<MboMsg, kContextDepth> context_;
+  bool context_captured_ = false;
 };
 
 /// `Book` must additionally expose `apply(const MboMsg&)`.
@@ -313,4 +297,4 @@ InvariantReport run_checked(Book& book, const Range& records, SessionState state
 
 }  // namespace bookreplay
 
-#endif
+#endif  // BOOKREPLAY_INVARIANTS_HPP
