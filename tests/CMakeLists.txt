@@ -17,6 +17,7 @@ add_executable(bookreplay_tests
   test_dbn_reader.cpp
   test_dbn_roundtrip.cpp
   test_definition.cpp
+  test_fast_book.cpp
   test_invariants.cpp
   test_mbp10_diff.cpp
   test_naked_window.cpp
@@ -35,8 +36,24 @@ target_compile_definitions(bookreplay_tests PRIVATE
 )
 bookreplay_set_warnings(bookreplay_tests)
 
+# Counting allocations replaces operator new for the whole binary, which would
+# hide a mismatched new and delete from ASan in every other test.
+add_executable(bookreplay_allocation_tests
+  test_fast_book_allocation.cpp
+  counting_new.cpp
+)
+target_include_directories(bookreplay_allocation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(bookreplay_allocation_tests PRIVATE
+  bookreplay::bookreplay bookreplay::zstd GTest::gtest_main
+)
+bookreplay_set_warnings(bookreplay_allocation_tests)
+
 include(GoogleTest)
 gtest_discover_tests(bookreplay_tests
+  PROPERTIES LABELS unit
+  DISCOVERY_TIMEOUT 60
+)
+gtest_discover_tests(bookreplay_allocation_tests
   PROPERTIES LABELS unit
   DISCOVERY_TIMEOUT 60
 )

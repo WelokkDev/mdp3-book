@@ -7,9 +7,9 @@
 #ifndef BOOKREPLAY_MBP10_DIFF_HPP
 #define BOOKREPLAY_MBP10_DIFF_HPP
 
-#include "bookreplay/book.hpp"
 #include "bookreplay/context_ring.hpp"
 #include "bookreplay/dbn.hpp"
+#include "bookreplay/depth.hpp"
 
 #include <array>
 #include <concepts>
@@ -21,55 +21,6 @@
 #include <vector>
 
 namespace bookreplay {
-
-/// Thrown when the book holds a value mbp-10 has no room for.
-class Mbp10DiffError : public BookreplayError {
- public:
-  using BookreplayError::BookreplayError;
-};
-
-inline constexpr std::size_t kDepthLevels = 10;
-
-using Depth10 = std::array<BidAskPair, kDepthLevels>;
-
-/// mbp-10 pads a level that does not exist rather than shortening its array.
-inline constexpr BidAskPair kPaddedLevel{kUndefPrice, kUndefPrice, 0, 0, 0, 0};
-
-inline constexpr Depth10 kPaddedDepth = [] {
-  Depth10 depth{};
-  depth.fill(kPaddedLevel);
-  return depth;
-}();
-
-/// The book's top ten levels per side in mbp-10's own layout: bids
-/// descending, asks ascending, the rest padded. Throws Mbp10DiffError if a
-/// level total or order count is too wide for the wire's 32 bits.
-[[nodiscard]] Depth10 top_ten(const Book& book, std::uint32_t instrument_id);
-
-/// All the differ asks of a book. `Book` satisfies it through the overload
-/// above; the fast book and the tests' deliberately wrong books bring their
-/// own.
-template <typename B>
-concept DepthBook = requires(const B& b, std::uint32_t instrument_id) {
-  { top_ten(b, instrument_id) } -> std::convertible_to<Depth10>;
-};
-
-/// The first of the sixty values two ladders disagree on.
-struct DepthMismatch {
-  std::size_t level = 0;   ///< 0-based
-  const char* field = "";  ///< "bid_px", "ask_ct", and so on
-  std::int64_t ours = 0;
-  std::int64_t theirs = 0;
-};
-
-/// Walks level by level, bids before asks and price before size before count,
-/// so what comes back is the highest disagreement in the ladder.
-[[nodiscard]] std::optional<DepthMismatch> first_mismatch(const Depth10& ours,
-                                                          const Depth10& theirs) noexcept;
-
-[[nodiscard]] inline bool same_depth(const Depth10& ours, const Depth10& theirs) noexcept {
-  return !first_mismatch(ours, theirs).has_value();
-}
 
 /// A book update is stamped with the closing MBO record's key. The key is not
 /// unique: one packet can carry two events for one instrument with identical

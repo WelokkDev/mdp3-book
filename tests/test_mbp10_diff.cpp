@@ -1,5 +1,8 @@
 #include "bookreplay/book.hpp"
+#include "bookreplay/book_view.hpp"
 #include "bookreplay/dbn.hpp"
+#include "bookreplay/depth.hpp"
+#include "bookreplay/fast_book.hpp"
 #include "bookreplay/mbp10_diff.hpp"
 
 #include <cstddef>
@@ -11,6 +14,7 @@
 
 #include <gtest/gtest.h>
 
+#include "book_types.hpp"
 #include "toy_stream.hpp"
 
 namespace bookreplay {
@@ -47,6 +51,7 @@ class FakeBook {
 }
 
 static_assert(DepthBook<Book>);
+static_assert(DepthBook<FastBook>);
 static_assert(DepthBook<FakeBook>);
 
 /// BidAskPair carries no equality of its own, and a failure that names the
@@ -187,53 +192,54 @@ using BookDiff = Mbp10Diff<Book, VectorSource>;
   return diff.report();
 }
 
-[[nodiscard]] Book warmed_book() {
-  const StreamBuilder opening = testing::opening_snapshot();
-  Book book;
-  for (const MboMsg& rec : opening.records()) {
+template <typename B>
+[[nodiscard]] B built_from(const StreamBuilder& stream) {
+  B book = testing::make_book<B>();
+  for (const MboMsg& rec : stream.records()) {
     book.apply(rec);
   }
   return book;
 }
 
-TEST(TopTen, AnEmptyBookAndAnUnknownInstrumentAreAllPadding) {
-  const Book empty;
+template <typename B>
+[[nodiscard]] B warmed_book() {
+  return built_from<B>(testing::opening_snapshot());
+}
+
+BOOKREPLAY_BOOK_SUITE(TopTen);
+
+TYPED_TEST(TopTen, AnEmptyBookAndAnUnknownInstrumentAreAllPadding) {
+  const TypeParam empty = testing::make_book<TypeParam>();
   EXPECT_TRUE(depth_eq(top_ten(empty, kFirst), kPaddedDepth));
 
-  const Book book = warmed_book();
+  const TypeParam book = warmed_book<TypeParam>();
   EXPECT_TRUE(depth_eq(top_ten(book, kSecond), kPaddedDepth));
   EXPECT_EQ(kPaddedDepth[0].bid_px, kUndefPrice);
   EXPECT_EQ(kPaddedDepth[0].bid_sz, 0u);
   EXPECT_EQ(kPaddedDepth[0].bid_ct, 0u);
 }
 
-TEST(TopTen, LevelsBelowTheDeepestArePadded) {
+TYPED_TEST(TopTen, LevelsBelowTheDeepestArePadded) {
   StreamBuilder b;
   b.add(100, Side::kBid, px(29000, 0), 10);
   b.add(101, Side::kBid, px(28999, 3), 7);
   b.add(200, Side::kAsk, px(29000, 1), 4).last();
 
-  Book book;
-  for (const MboMsg& rec : b.records()) {
-    book.apply(rec);
-  }
+  const TypeParam book = built_from<TypeParam>(b);
 
   const Depth10 expected =
       depth({{px(29000, 0), px(29000, 1), 10, 4, 1, 1}, {px(28999, 3), kUndefPrice, 7, 0, 1, 0}});
   EXPECT_TRUE(depth_eq(top_ten(book, kFirst), expected));
 }
 
-TEST(TopTen, BidsDescendAndAsksAscend) {
+TYPED_TEST(TopTen, BidsDescendAndAsksAscend) {
   StreamBuilder b;
   b.add(100, Side::kBid, px(28999, 3), 7);
   b.add(101, Side::kBid, px(29000, 0), 10);
   b.add(200, Side::kAsk, px(29000, 2), 7);
   b.add(201, Side::kAsk, px(29000, 1), 10).last();
 
-  Book book;
-  for (const MboMsg& rec : b.records()) {
-    book.apply(rec);
-  }
+  const TypeParam book = built_from<TypeParam>(b);
 
   const Depth10 top = top_ten(book, kFirst);
   EXPECT_EQ(top[0].bid_px, px(29000, 0));
@@ -242,47 +248,38 @@ TEST(TopTen, BidsDescendAndAsksAscend) {
   EXPECT_EQ(top[1].ask_px, px(29000, 2));
 }
 
-TEST(TopTen, TheEleventhLevelIsExcluded) {
+TYPED_TEST(TopTen, TheEleventhLevelIsExcluded) {
   StreamBuilder b;
   for (std::int64_t i = 0; i < 11; ++i) {
     b.add(100 + static_cast<std::uint64_t>(i), Side::kBid, px(29000, -i), 10);
   }
   b.last();
 
-  Book book;
-  for (const MboMsg& rec : b.records()) {
-    book.apply(rec);
-  }
+  const TypeParam book = built_from<TypeParam>(b);
 
   EXPECT_TRUE(depth_eq(top_ten(book, kFirst), bid_ladder(px(29000, 0))));
-  EXPECT_NE(book.level(kFirst, Side::kBid, px(29000, -10)), nullptr);
+  EXPECT_TRUE(level_view(book, kFirst, Side::kBid, px(29000, -10)).has_value());
 }
 
-TEST(TopTen, TheCountIsOrdersAndNotQuantity) {
+TYPED_TEST(TopTen, TheCountIsOrdersAndNotQuantity) {
   StreamBuilder b;
   b.add(100, Side::kBid, px(29000, 0), 6);
   b.add(101, Side::kBid, px(29000, 0), 9).last();
 
-  Book book;
-  for (const MboMsg& rec : b.records()) {
-    book.apply(rec);
-  }
+  const TypeParam book = built_from<TypeParam>(b);
 
   const Depth10 top = top_ten(book, kFirst);
   EXPECT_EQ(top[0].bid_sz, 15u);
   EXPECT_EQ(top[0].bid_ct, 2u);
 }
 
-TEST(TopTen, AnInPlaceModifyMovesSizeAndNotCount) {
+TYPED_TEST(TopTen, AnInPlaceModifyMovesSizeAndNotCount) {
   StreamBuilder b;
   b.add(100, Side::kBid, px(29000, 0), 10);
   b.add(101, Side::kBid, px(29000, 0), 5).last();
   b.modify(100, Side::kBid, px(29000, 0), 4).last();
 
-  Book book;
-  for (const MboMsg& rec : b.records()) {
-    book.apply(rec);
-  }
+  const TypeParam book = built_from<TypeParam>(b);
 
   const Depth10 top = top_ten(book, kFirst);
   EXPECT_EQ(top[0].bid_sz, 9u);
@@ -290,23 +287,21 @@ TEST(TopTen, AnInPlaceModifyMovesSizeAndNotCount) {
   EXPECT_EQ(book.queue_ahead(kFirst, 101), std::uint64_t{4});
 }
 
-TEST(TopTen, ALevelTotalTooWideForTheWireThrows) {
+TYPED_TEST(TopTen, ALevelTotalTooWideForTheWireThrows) {
   constexpr std::uint32_t kHalfOfTheRange = 1U << 31;
   StreamBuilder b;
   b.add(100, Side::kBid, px(29000, 0), kHalfOfTheRange);
   b.add(101, Side::kBid, px(29000, 0), kHalfOfTheRange).last();
 
-  Book book;
-  for (const MboMsg& rec : b.records()) {
-    book.apply(rec);
-  }
+  const TypeParam book = built_from<TypeParam>(b);
 
-  EXPECT_EQ(book.level(kFirst, Side::kBid, px(29000, 0))->size, std::uint64_t{1} << 32);
-  EXPECT_THROW((void)top_ten(book, kFirst), Mbp10DiffError);
+  ASSERT_TRUE(level_view(book, kFirst, Side::kBid, px(29000, 0)).has_value());
+  EXPECT_EQ(level_view(book, kFirst, Side::kBid, px(29000, 0))->total, std::uint64_t{1} << 32);
+  EXPECT_THROW((void)top_ten(book, kFirst), DepthError);
 }
 
-TEST(TopTen, AClearLeavesAllPadding) {
-  Book book = warmed_book();
+TYPED_TEST(TopTen, AClearLeavesAllPadding) {
+  TypeParam book = warmed_book<TypeParam>();
   ASSERT_FALSE(depth_eq(top_ten(book, kFirst), kPaddedDepth));
 
   StreamBuilder b;

@@ -1,9 +1,9 @@
 // A limit order book rebuilt from market-by-order.
 //
 // This is the reference implementation: obvious containers, no attempt at
-// speed. It is meant to survive the fast book rather than be replaced by it.
-// Once both exist, this one is the oracle the fast one is differentially
-// tested against, the same way databento-dbn is the oracle for the decoder.
+// speed. It survives the fast book rather than being replaced by it, because
+// it is the oracle `FastBook` is differentially tested against, the same way
+// databento-dbn is the oracle for the decoder.
 // An oracle that quietly repairs itself is worthless, so an internal
 // inconsistency here throws rather than clamps.
 
@@ -19,7 +19,6 @@
 #include <limits>
 #include <map>
 #include <unordered_map>
-#include <utility>
 #include <vector>
 
 namespace bookreplay {
@@ -60,8 +59,8 @@ class Book {
     std::int64_t price = 0;
     std::uint32_t size = 0;
     /// Quantity F records have attributed to this order since its last M, or
-    /// since the last event boundary. Read by the next M to tell a partial
-    /// fill's remainder from an iceberg refresh. Never part of `size`.
+    /// since its instrument's last event boundary. Read by the next M to tell a
+    /// partial fill's remainder from an iceberg refresh. Never part of `size`.
     std::uint64_t filled = 0;
   };
 
@@ -152,6 +151,10 @@ class Book {
     std::unordered_map<std::uint64_t, Resting> orders;
     Bids bids;
     Asks asks;
+    /// What `forget_fills` must reset at this instrument's next boundary, kept
+    /// so it need not walk every resting order. An id may appear twice, and
+    /// may name an order cancelled since.
+    std::vector<std::uint64_t> filled_this_event;
   };
 
   [[nodiscard]] const Instrument* find(std::uint32_t instrument_id) const {
@@ -170,15 +173,41 @@ class Book {
   void cancel(const MboMsg& rec);
   void modify(const MboMsg& rec);
   void fill(const MboMsg& rec);
-  void forget_fills();
+  void forget_fills(std::uint32_t instrument_id);
 
   std::unordered_map<std::uint32_t, Instrument> books_;
-  /// Orders an F has touched since the last event boundary.
-  std::vector<std::pair<std::uint32_t, std::uint64_t>> filled_this_event_;
   std::uint64_t mutations_ = 0;
   std::uint64_t unknown_modifies_ = 0;
   std::uint64_t duplicate_adds_ = 0;
 };
+
+/// An order id of 0 is the venue's "no order" sentinel, and a side of 'N'
+/// names no book to rest in. A record carrying either places nothing in any
+/// book here.
+[[nodiscard]] constexpr bool placeable(Side side, std::uint64_t order_id) noexcept {
+  return order_id != 0 && (side == Side::kBid || side == Side::kAsk);
+}
+
+/// Whether an M leaves the order it names in its place in the queue. It does
+/// only if side and price are unchanged and the size does not grow; anything
+/// else is a new order at the tail.
+///
+/// A fill complicates the size test. A partial fill arrives as an F, then an M
+/// carrying the remainder, which keeps priority. An iceberg refreshing a
+/// consumed tranche looks the same, an M at the old displayed size or less,
+/// but queues at the tail. So after an F, the M keeps priority only if its
+/// size is exactly what the fill left behind.
+///
+/// A level's total is the same either way, so no aggregate view can falsify
+/// this rule, the mbp-10 diff included. Nor can comparing two books here,
+/// since both decide by this one function; its unit tests pin it.
+[[nodiscard]] constexpr bool keeps_priority(const Book::Resting& before,
+                                            const MboMsg& rec) noexcept {
+  const std::uint64_t remainder = before.size > before.filled ? before.size - before.filled : 0;
+  const bool size_keeps =
+      before.filled == 0 ? rec.size <= before.size : std::uint64_t{rec.size} == remainder;
+  return before.side == side_of(rec) && before.price == rec.price && size_keeps;
+}
 
 }  // namespace bookreplay
 

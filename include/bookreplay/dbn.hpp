@@ -481,8 +481,10 @@ template <typename T>
   return (r.flags & flag) != 0;
 }
 
-/// Post-renormalization the F_LAST flag may arrive on a standalone
-/// `action='N'` record: on 2026-08-05, 482,044 of 26,878,300 boundaries did.
+/// Databento's DBN flag documentation defines F_LAST as "the last record in
+/// the event from the venue for a given `instrument_id`", so a boundary closes
+/// that instrument's event and no other's. Post-renormalization the flag may
+/// arrive on a standalone `action='N'` record.
 [[nodiscard]] constexpr bool is_event_boundary(const MboMsg& r) noexcept {
   return has_flag(r, kFlagLast);
 }

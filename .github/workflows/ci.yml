@@ -190,6 +190,31 @@ jobs:
       - name: Test
         run: ctest --test-dir build -L python --output-on-failure
 
+  # Builds the benchmarks and runs each case for one iteration on the
+  # synthetic stream, so they cannot rot. Nothing here is timed against a
+  # threshold: a shared runner's clock would make any threshold noise. The one
+  # performance claim CI can check, that the fast book stops allocating once it
+  # has held its most, is a unit test in the suite above.
+  benchmarks:
+    name: benchmarks (synthetic)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: lukka/get-cmake@latest
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DBOOKREPLAY_BUILD_TESTS=OFF
+          -DBOOKREPLAY_BUILD_BENCHMARKS=ON
+
+      - name: Build
+        run: cmake --build build --target bookreplay_benchmarks
+
+      - name: Run
+        run: ./build/benchmarks/bookreplay_benchmarks --benchmark_min_time=1x
+
   format:
     name: clang-format
     runs-on: ubuntu-latest

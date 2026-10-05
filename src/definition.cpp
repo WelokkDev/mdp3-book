@@ -188,6 +188,17 @@ std::vector<std::uint32_t> InstrumentCatalog::instruments() const {
   return out;
 }
 
+std::vector<std::pair<std::uint32_t, std::int64_t>> InstrumentCatalog::tick_sizes() const {
+  std::vector<std::pair<std::uint32_t, std::int64_t>> out;
+  for (const std::uint32_t instrument_id : instruments()) {
+    const InstrumentDefinition& def = definitions_.at(instrument_id);
+    if (def.has_tick_size()) {
+      out.emplace_back(instrument_id, def.min_price_increment);
+    }
+  }
+  return out;
+}
+
 void require_definitions_for(const DbnMetadata& definitions, const DbnMetadata& data) {
   require_definition_schema(definitions);
   if (definitions.dataset != data.dataset) {

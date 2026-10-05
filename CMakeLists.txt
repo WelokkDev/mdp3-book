@@ -16,6 +16,7 @@ option(BOOKREPLAY_BUILD_TESTS "Build the test suite" ${BOOKREPLAY_IS_TOP_LEVEL})
 option(BOOKREPLAY_BUILD_TOOLS "Build the command-line tools" ${BOOKREPLAY_IS_TOP_LEVEL})
 option(BOOKREPLAY_BUILD_ORACLE "Build the databento-cpp differential oracle (requires an installed databento-cpp)" OFF)
 option(BOOKREPLAY_BUILD_PYTHON "Build the pybind11 extension module" OFF)
+option(BOOKREPLAY_BUILD_BENCHMARKS "Build the benchmarks (fetches Google Benchmark)" OFF)
 option(BOOKREPLAY_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" ON)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -40,9 +41,12 @@ include(Zstd)
 
 add_library(bookreplay
   src/book.cpp
+  src/book_view.cpp
   src/dbn.cpp
   src/dbn_reader.cpp
   src/definition.cpp
+  src/depth.cpp
+  src/fast_book.cpp
   src/mbp10_diff.cpp
   src/order.cpp
   src/replay.cpp
@@ -75,4 +79,8 @@ endif()
 if(BOOKREPLAY_BUILD_PYTHON)
   include(Pybind11)
   add_subdirectory(python)
+endif()
+
+if(BOOKREPLAY_BUILD_BENCHMARKS)
+  add_subdirectory(benchmarks)
 endif()

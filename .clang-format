@@ -22,7 +22,7 @@ IncludeBlocks: Regroup
 IncludeCategories:
   - Regex: '^"bookreplay/'
     Priority: 1
-  - Regex: '^<gtest/'
+  - Regex: '^<(gtest|benchmark)/'
     Priority: 3
   - Regex: '^<.*>'
     Priority: 2

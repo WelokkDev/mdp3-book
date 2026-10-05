@@ -1,5 +1,6 @@
 #include "bookreplay/book.hpp"
 #include "bookreplay/dbn.hpp"
+#include "bookreplay/fast_book.hpp"
 #include "bookreplay/invariants.hpp"
 
 #include <cstdint>
@@ -8,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include "book_types.hpp"
 #include "toy_book.hpp"
 #include "toy_stream.hpp"
 
@@ -23,6 +25,7 @@ using testing::ToyBook;
 using testing::TradeMutatesBook;
 
 static_assert(BookLike<Book>);
+static_assert(BookLike<FastBook>);
 static_assert(BookLike<ToyBook>);
 static_assert(BookLike<FillAsDeltaBook>);
 static_assert(BookLike<FillAsDeleteBook>);
@@ -86,9 +89,9 @@ TEST(CorrectBook, IcebergFillIsCountedAsDataNotFailure) {
   expect_iceberg_fill_is_data(book);
 }
 
-// The same two fixtures, driven through the real book. ToyBook proves the
-// harness; Book is what the harness exists for, and `run_checked` takes it
-// with no change of its own.
+// The same two fixtures, driven through the real books. ToyBook proves the
+// harness; the books are what the harness exists for, and `run_checked` takes
+// either with no change of its own.
 
 TEST(CorrectBook, RealBookSatisfiesEveryInvariantOnTheCleanTradeEvent) {
   Book book;
@@ -98,6 +101,18 @@ TEST(CorrectBook, RealBookSatisfiesEveryInvariantOnTheCleanTradeEvent) {
 
 TEST(CorrectBook, RealBookCountsTheIcebergFillAsDataNotFailure) {
   Book book;
+  expect_iceberg_fill_is_data(book);
+  EXPECT_NO_THROW(book.verify());
+}
+
+TEST(CorrectBook, FastBookSatisfiesEveryInvariantOnTheCleanTradeEvent) {
+  FastBook book = testing::make_book<FastBook>();
+  expect_clean_trade_event_is_clean(book);
+  EXPECT_NO_THROW(book.verify());
+}
+
+TEST(CorrectBook, FastBookCountsTheIcebergFillAsDataNotFailure) {
+  FastBook book = testing::make_book<FastBook>();
   expect_iceberg_fill_is_data(book);
   EXPECT_NO_THROW(book.verify());
 }

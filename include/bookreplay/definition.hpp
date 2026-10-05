@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace bookreplay {
@@ -114,6 +115,10 @@ class InstrumentCatalog {
 
   /// Ascending, so a report over them is stable across runs.
   [[nodiscard]] std::vector<std::uint32_t> instruments() const;
+
+  /// Each instrument with a usable increment, and that increment, ascending by
+  /// id: what a book that addresses its levels by tick needs up front.
+  [[nodiscard]] std::vector<std::pair<std::uint32_t, std::int64_t>> tick_sizes() const;
 
   [[nodiscard]] const InstrumentCatalogStats& stats() const noexcept { return stats_; }
 

@@ -6,12 +6,6 @@
 namespace bookreplay {
 namespace {
 
-/// An order id of 0 is the venue's "no order" sentinel, and a side of 'N'
-/// names no book to rest in. Neither can be placed.
-[[nodiscard]] bool placeable(Side side, std::uint64_t order_id) noexcept {
-  return order_id != 0 && (side == Side::kBid || side == Side::kAsk);
-}
-
 /// Templated only because the bid and ask maps order their keys differently.
 template <typename LevelMap>
 void drop_from(LevelMap& levels, std::int64_t price, std::uint64_t order_id, std::uint32_t size) {
@@ -127,26 +121,6 @@ void Book::cancel(const MboMsg& rec) {
   erase(it->second, rec.order_id);
 }
 
-// An order keeps its place in the queue only when a modify leaves its price
-// alone and does not increase its size. A price change, or a size increase,
-// is a new order at the tail.
-//
-// A fill complicates the size test. The venue reports a partial fill as an F
-// and then an M carrying the remainder, and that M keeps priority. But an
-// iceberg whose displayed tranche was consumed is refreshed the same way (an
-// M at the same price, usually at the same size as before and sometimes
-// smaller when the fill ate into hidden quantity), and the new tranche queues
-// at the tail. The fill tells the two apart: after an F, the M keeps priority
-// only if its size is exactly what the fill left behind. On 2026-08-26, an NQ
-// day from a post-renormalization pull, all 2,032 same-price, same-size M
-// records followed an F for that order, and the next fill at the level went
-// to an order queued behind it six times out of seven.
-//
-// tests/toy_book.hpp does erase-then-insert unconditionally. That is correct
-// for an aggregate and destroys queue position every time, and no aggregate
-// view can tell the two apart: a level's total is identical either way.
-// Only fill timing can, which is why the mbp-10 diff cannot falsify this
-// rule on its own.
 void Book::modify(const MboMsg& rec) {
   const Side side = side_of(rec);
   if (!placeable(side, rec.order_id)) {
@@ -163,20 +137,15 @@ void Book::modify(const MboMsg& rec) {
     return;
   }
 
-  const Resting before = it->second;
-  const std::uint64_t remainder = before.size > before.filled ? before.size - before.filled : 0;
-  const bool size_keeps =
-      before.filled == 0 ? rec.size <= before.size : std::uint64_t{rec.size} == remainder;
-  const bool keeps_priority = before.side == side && before.price == rec.price && size_keeps;
-  if (!keeps_priority) {
+  if (!keeps_priority(it->second, rec)) {
     erase(b, rec.order_id);
     insert(b, rec.order_id, side, rec.price, rec.size);
     return;
   }
 
   // In place: the queue is untouched and only the aggregate moves.
-  Level* lvl = level_in(b, side, before.price);
-  const std::uint32_t reduction = before.size - rec.size;
+  Level* lvl = level_in(b, side, rec.price);
+  const std::uint32_t reduction = it->second.size - rec.size;
   if (lvl == nullptr || lvl->size < reduction) {
     throw BookError("resting order's level cannot absorb its size reduction");
   }
@@ -197,23 +166,24 @@ void Book::fill(const MboMsg& rec) {
     return;
   }
   if (it->second.filled == 0) {
-    filled_this_event_.emplace_back(rec.hd.instrument_id, rec.order_id);
+    b->second.filled_this_event.push_back(rec.order_id);
   }
   it->second.filled += rec.size;
 }
 
-void Book::forget_fills() {
-  for (const auto& [instrument_id, order_id] : filled_this_event_) {
-    const auto b = books_.find(instrument_id);
-    if (b == books_.end()) {
-      continue;
-    }
-    const auto it = b->second.orders.find(order_id);
-    if (it != b->second.orders.end()) {
+void Book::forget_fills(std::uint32_t instrument_id) {
+  const auto found = books_.find(instrument_id);
+  if (found == books_.end()) {
+    return;
+  }
+  Instrument& b = found->second;
+  for (const std::uint64_t order_id : b.filled_this_event) {
+    const auto it = b.orders.find(order_id);
+    if (it != b.orders.end()) {
       it->second.filled = 0;
     }
   }
-  filled_this_event_.clear();
+  b.filled_this_event.clear();
 }
 
 void Book::apply(const MboMsg& rec) {
@@ -250,15 +220,15 @@ void Book::apply(const MboMsg& rec) {
   // expects of an unknown action.
 
   // Fill attribution is scoped to the event it arrived in, so an F with no
-  // C or M behind it cannot recolour a later, unrelated M.
+  // C or M behind it cannot recolour a later, unrelated M. F_LAST closes only
+  // its own instrument's event, so only that instrument's fills are forgotten.
   if (is_event_boundary(rec)) {
-    forget_fills();
+    forget_fills(rec.hd.instrument_id);
   }
 }
 
 void Book::reset() {
   books_.clear();
-  filled_this_event_.clear();
 }
 
 void Book::verify() const {

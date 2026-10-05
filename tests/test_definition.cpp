@@ -230,6 +230,22 @@ TEST(DefinedTick, AnIncrementChangedWithinTheStreamLeavesNoTickSize) {
   EXPECT_FALSE(catalog.at(kNqu6).has_tick_size());
 }
 
+TEST(DefinedTick, TickSizesListOnlyTheInstrumentsThatHaveOne) {
+  InstrumentDefMsg changed = outright(kNqh7, "NQH7", 2 * kTick);
+  changed.ts_recv += kDay;
+
+  InstrumentCatalog catalog;
+  catalog.apply(outright(kNqu6, "NQU6"));
+  catalog.apply(outright(kNqz6, "NQZ6", kUndefPrice));
+  catalog.apply(outright(kNqh7, "NQH7"));
+  catalog.apply(changed);
+  catalog.apply(nearby_leg());
+  catalog.apply(deferred_leg());
+
+  EXPECT_EQ(catalog.tick_sizes(), (std::vector<std::pair<std::uint32_t, std::int64_t>>{
+                                      {kNqu6, kTick}, {kNqu6Nqz6, kSpreadTick}}));
+}
+
 TEST(OutrightOrSpread, CountsInstrumentsNotRecords) {
   InstrumentCatalog catalog;
   catalog.apply(outright(kNqu6, "NQU6"));

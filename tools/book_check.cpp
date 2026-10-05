@@ -1,4 +1,4 @@
-// Replays a real MBO day through Book under InvariantHarness, merging the
+// Replays a real MBO day through a book under InvariantHarness, merging the
 // status schema in so the crossed-book check runs only while the venue says
 // the instrument is trading. Given the definition schema, it also checks every
 // price against its own instrument's tick.
@@ -6,6 +6,7 @@
 #include "bookreplay/book.hpp"
 #include "bookreplay/dbn_reader.hpp"
 #include "bookreplay/definition.hpp"
+#include "bookreplay/fast_book.hpp"
 #include "bookreplay/invariants.hpp"
 
 #include <algorithm>
@@ -21,6 +22,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "books.hpp"
 #include "cli.hpp"
 
 namespace {
@@ -39,12 +41,14 @@ struct Options {
   std::uint32_t period = 1;
   std::uint64_t limit = 0;
   bool assume_trading = false;
+  BookChoice book = BookChoice::kReference;
 };
 
 int usage() {
   std::fputs(
       "usage: book_check <mbo.dbn[.zst]> [--status FILE.dbn[.zst]] [--assume-trading]\n"
-      "                  [--definition FILE.dbn[.zst]] [--period N] [--limit N]\n",
+      "                  [--definition FILE.dbn[.zst]] [--period N] [--limit N]\n"
+      "                  [--book reference|fast]\n",
       stderr);
   return 2;
 }
@@ -92,12 +96,6 @@ std::vector<StatusMsg> read_status(const std::string& path, const DbnMetadata& m
     return a.hd.ts_event < b.hd.ts_event;
   });
   return out;
-}
-
-InstrumentCatalog read_catalog(const std::string& path, const DbnMetadata& mbo_meta) {
-  DbnReader reader{std::filesystem::path{path}};
-  require_definitions_for(reader.metadata(), mbo_meta);
-  return read_definitions(reader);
 }
 
 struct DefinitionReport {
@@ -217,7 +215,8 @@ std::unordered_map<std::uint64_t, std::uint64_t> context_times(const InvariantRe
   return out;
 }
 
-void print_report(const InvariantReport& report, const Book& book,
+template <typename B>
+void print_report(const InvariantReport& report, const B& book,
                   const std::vector<std::uint32_t>& without_status,
                   const std::optional<DefinitionReport>& definitions) {
   std::string out;
@@ -321,22 +320,12 @@ void print_report(const InvariantReport& report, const Book& book,
   std::fwrite(out.data(), 1, out.size(), stdout);
 }
 
-int run(const Options& opts) {
-  DbnReader reader{std::filesystem::path{opts.mbo_path}};
-  const std::vector<StatusMsg> statuses = opts.status_path.empty()
-                                              ? std::vector<StatusMsg>{}
-                                              : read_status(opts.status_path, reader.metadata());
-  InstrumentCatalog catalog;
-  std::optional<DefinitionReport> definitions;
-  if (!opts.definition_path.empty()) {
-    catalog = read_catalog(opts.definition_path, reader.metadata());
-    definitions.emplace();
-  }
-
-  Book book;
-  InvariantHarness<Book>::Options harness_opts;
+template <typename B>
+int replay(B& book, DbnReader& reader, const Options& opts, const std::vector<StatusMsg>& statuses,
+           const InstrumentCatalog& catalog, std::optional<DefinitionReport> definitions) {
+  typename InvariantHarness<B>::Options harness_opts;
   harness_opts.cross_check_period = opts.period;
-  InvariantHarness<Book> harness(book, harness_opts);
+  InvariantHarness<B> harness(book, harness_opts);
   if (opts.assume_trading) {
     harness.set_session_state(SessionState::kTrading);
   }
@@ -399,6 +388,27 @@ int run(const Options& opts) {
   return passed(harness.report(), definitions) ? 0 : 1;
 }
 
+int run(const Options& opts) {
+  DbnReader reader{std::filesystem::path{opts.mbo_path}};
+  const std::vector<StatusMsg> statuses = opts.status_path.empty()
+                                              ? std::vector<StatusMsg>{}
+                                              : read_status(opts.status_path, reader.metadata());
+  InstrumentCatalog catalog;
+  std::optional<DefinitionReport> definitions;
+  if (!opts.definition_path.empty()) {
+    catalog = read_catalog(opts.definition_path, reader.metadata());
+    definitions.emplace();
+  }
+
+  if (opts.book == BookChoice::kFast) {
+    FastBook book;
+    set_tick_sizes(book, catalog);
+    return replay(book, reader, opts, statuses, catalog, definitions);
+  }
+  Book book;
+  return replay(book, reader, opts, statuses, catalog, definitions);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -423,6 +433,10 @@ int main(int argc, char** argv) {
       if (!parse_u64(argv[++i], opts.limit)) {
         return usage();
       }
+    } else if (arg == "--book" && has_value) {
+      if (!parse_book(argv[++i], opts.book)) {
+        return usage();
+      }
     } else if (arg == "--assume-trading") {
       opts.assume_trading = true;
     } else {
@@ -433,6 +447,10 @@ int main(int argc, char** argv) {
   if (!opts.status_path.empty() && opts.assume_trading) {
     std::fputs("book_check: --assume-trading is the ungated run; it does not take --status\n",
                stderr);
+    return usage();
+  }
+  if (opts.book == BookChoice::kFast && opts.definition_path.empty()) {
+    std::fprintf(stderr, "book_check: %s\n", kFastNeedsDefinition);
     return usage();
   }
 

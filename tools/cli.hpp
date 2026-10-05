@@ -4,6 +4,8 @@
 #ifndef BOOKREPLAY_TOOLS_CLI_HPP
 #define BOOKREPLAY_TOOLS_CLI_HPP
 
+#include "bookreplay/dbn.hpp"
+
 #include <array>
 #include <cerrno>
 #include <cstdint>
@@ -51,6 +53,28 @@ inline std::string time_of_day(std::uint64_t ts_ns) {
                 static_cast<unsigned long long>(in_day % 60),
                 static_cast<unsigned long long>(ts_ns % 1'000'000'000));
   return std::string{buf.data()};
+}
+
+/// Padding reads as a dash rather than as the sentinel's 9.2 quintillion.
+inline std::string value_text(std::int64_t value) {
+  return is_undef_price(value) ? std::string{"-"} : std::to_string(value);
+}
+
+inline void field(std::string& out, const std::string& text) {
+  out += '\t';
+  out += text;
+}
+
+inline void append_mbo(std::string& out, const MboMsg& rec) {
+  field(out, std::to_string(rec.hd.instrument_id));
+  field(out, std::string{rec.action});
+  field(out, std::string{rec.side});
+  field(out, std::to_string(rec.order_id));
+  field(out, value_text(rec.price));
+  field(out, std::to_string(rec.size));
+  field(out, std::to_string(rec.flags));
+  field(out, std::to_string(rec.sequence));
+  field(out, time_of_day(rec.ts_recv));
 }
 
 }  // namespace bookreplay::tools

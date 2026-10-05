@@ -5,8 +5,10 @@ CME MDP 3.0 limit order book reconstruction from Databento DBN.
 **Work in progress.** The decoder, invariant harness, trades-only replay
 driver, order-by-order book and instrument catalog are built and tested, and the
 book replays five real trading days with every invariant holding and its top ten
-levels matching the venue's own `mbp-10` at every event boundary. Nothing fills
-against it.
+levels matching the venue's own `mbp-10` at every event boundary. A second book,
+built for speed, applies a day in just over a quarter of the time and gives
+`book_check` and `book_diff` the same output on all five days. Nothing fills
+against either.
 
 ## Why
 
@@ -127,6 +129,39 @@ in the event it closes, on every record in the five days.
 What this cannot see is queue order. Force `Book::modify` to always re-queue
 and `book_diff` prints byte-identical output on all five days.
 
+## Throughput
+
+On 2026-08-26, 20,131,692 records, one core of an Apple M5 Pro, AppleClang 21,
+the `release` preset (`RelWithDebInfo`), median of five repetitions. The book
+rows replay records already decoded into memory, so they time the book and not
+zstd:
+
+| | ns per record | million records/s | allocations |
+|---|---:|---:|---:|
+| decode, zstd-framed file | 42.6 | 23.5 | |
+| decode, raw file | 12.2 | 82.3 | |
+| `Book::apply` | 83.6 | 12.0 | 24,094,584 |
+| `FastBook::apply` | 22.9 | 43.7 | 141 |
+| `Book`, with `top_ten` at every event boundary | 128.5 | 7.8 | 24,094,584 |
+| `FastBook`, with `top_ten` at every event boundary | 50.7 | 19.7 | 141 |
+
+End to end, under `/usr/bin/time -l`, `book_check --status --definition` takes
+2.77 s and peaks at 17.4 MB resident with the reference book, 1.50 s and 9.2 MB
+with `--book fast`. `book_diff` gains less, 6.5 s to 4.9 s, because decoding the
+day's 16.5 million `mbp-10` records and diffing them is most of its time.
+
+The reference spends its time allocating: each level is a `std::deque`, and
+opening one costs a tree node and, on libc++, a 4 KB block. The fast book keeps
+its orders in a slab, each level an intrusive list threaded through it, so a
+level opens and closes without allocating. Order ids go through an
+open-addressing table, and levels are addressed by tick in pages of 1,024 with a
+bitmap per page, so the touch and the top ten are bit scans.
+
+The fast book allocates only when its storage grows, and counts each time it
+does: the day's 141 allocations are exactly those events, 29 of them after the
+opening snapshot. A unit test replays a synthetic stream past its warm-up and
+fails on any allocation.
+
 ## Instruments
 
 `InstrumentCatalog` reads the `definition` schema, which publishes a tick size
@@ -158,6 +193,23 @@ cmake --build --preset debug
 ctest --preset debug
 ```
 
+`book_check` and `book_diff` take `--book fast`, which needs `--definition` for
+its ticks. On a day whose every price is on its grid it prints the same bytes as
+the default reference run; where the reference counts off-grid prices, the fast
+book stops at the first.
+
+The benchmarks are off by default, since they fetch Google Benchmark, pinned by
+tarball hash like zstd. Given no file they replay a synthetic stream, which is
+what CI runs; those numbers describe the generator, not a trading day.
+
+```sh
+cmake --preset release -DBOOKREPLAY_BUILD_BENCHMARKS=ON
+cmake --build --preset release
+build/release/benchmarks/bookreplay_benchmarks \
+    --mbo DAY.mbo.dbn.zst --definition DAY.definition.dbn.zst \
+    --benchmark_repetitions=5 --benchmark_report_aggregates_only=true
+```
+
 The Python extension is off by default, since it needs a Python development
 environment the library does not. It binds order entry and cancellation,
 `advance_to` and its fills, the order and statistics views, `load_ticks` and
@@ -172,7 +224,8 @@ ctest --test-dir build -L python
 
 CI builds GCC and Clang on Linux, AppleClang on macOS and MSVC on Windows, all
 with warnings as errors, runs the suite under ASan and UBSan, builds the Python
-module on Linux and Windows, and runs both oracles.
+module on Linux and Windows, runs both oracles, and runs every benchmark for one
+iteration on the synthetic stream.
 
 ## Corpus
 

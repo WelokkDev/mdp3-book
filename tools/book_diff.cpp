@@ -1,13 +1,15 @@
-// Replays a real MBO day through Book and compares its top ten levels per
+// Replays a real MBO day through a book and compares its top ten levels per
 // side against the venue's own mbp-10 at every event boundary.
 //
 // Unlike book_check this takes no --status. The venue's mbp-10 carries the
-// same crossed book outside trading hours that Book holds, so gating the
-// comparison on the session would only throw agreement away.
+// same crossed book outside trading hours that the replayed book holds, so
+// gating the comparison on the session would only throw agreement away.
 
 #include "bookreplay/book.hpp"
 #include "bookreplay/dbn.hpp"
 #include "bookreplay/dbn_reader.hpp"
+#include "bookreplay/definition.hpp"
+#include "bookreplay/fast_book.hpp"
 #include "bookreplay/mbp10_diff.hpp"
 
 #include <cstddef>
@@ -16,6 +18,7 @@
 #include <filesystem>
 #include <string>
 
+#include "books.hpp"
 #include "cli.hpp"
 
 namespace {
@@ -26,11 +29,16 @@ using namespace bookreplay::tools;
 struct Options {
   std::string mbo_path;
   std::string mbp10_path;
+  std::string definition_path;
   std::uint64_t limit = 0;
+  BookChoice book = BookChoice::kReference;
 };
 
 int usage() {
-  std::fputs("usage: book_diff <mbo.dbn[.zst]> --mbp10 FILE.dbn[.zst] [--limit N]\n", stderr);
+  std::fputs(
+      "usage: book_diff <mbo.dbn[.zst]> --mbp10 FILE.dbn[.zst] [--limit N]\n"
+      "                 [--book reference|fast] [--definition FILE.dbn[.zst]]\n",
+      stderr);
   return 2;
 }
 
@@ -60,16 +68,6 @@ void require_same_window(const DbnMetadata& mbp10, const DbnMetadata& mbo) {
   }
 }
 
-/// Padding reads as a dash rather than as the sentinel's 9.2 quintillion.
-std::string value_text(std::int64_t value) {
-  return is_undef_price(value) ? std::string{"-"} : std::to_string(value);
-}
-
-void field(std::string& out, const std::string& text) {
-  out += '\t';
-  out += text;
-}
-
 void append_level(std::string& out, const BidAskPair& level) {
   field(out, value_text(level.bid_px));
   field(out, std::to_string(level.bid_sz));
@@ -77,18 +75,6 @@ void append_level(std::string& out, const BidAskPair& level) {
   field(out, value_text(level.ask_px));
   field(out, std::to_string(level.ask_sz));
   field(out, std::to_string(level.ask_ct));
-}
-
-void append_mbo(std::string& out, const MboMsg& rec) {
-  field(out, std::to_string(rec.hd.instrument_id));
-  field(out, std::string{rec.action});
-  field(out, std::string{rec.side});
-  field(out, std::to_string(rec.order_id));
-  field(out, value_text(rec.price));
-  field(out, std::to_string(rec.size));
-  field(out, std::to_string(rec.flags));
-  field(out, std::to_string(rec.sequence));
-  field(out, time_of_day(rec.ts_recv));
 }
 
 void print_context(std::string& out, const DivergenceContext& ctx) {
@@ -198,11 +184,8 @@ void print_report(const Mbp10DiffReport& report) {
   std::fwrite(out.data(), 1, out.size(), stdout);
 }
 
-int run(const Options& opts) {
-  DbnReader mbo{std::filesystem::path{opts.mbo_path}};
-  DbnReader mbp10{std::filesystem::path{opts.mbp10_path}};
-  require_same_window(mbp10.metadata(), mbo.metadata());
-
+template <typename B>
+int replay(B& book, DbnReader& mbo, DbnReader& mbp10, const Options& opts) {
   auto source = [&mbp10]() -> const Mbp10Msg* {
     const RecordHeader* hd = mbp10.next();
     if (hd == nullptr) {
@@ -216,7 +199,6 @@ int run(const Options& opts) {
     return rec;
   };
 
-  Book book;
   Mbp10Diff diff{book, source};
 
   // A limited run leaves the mbp-10 stream with records the MBO stream never
@@ -251,6 +233,20 @@ int run(const Options& opts) {
   return diff.ok() ? 0 : 1;
 }
 
+int run(const Options& opts) {
+  DbnReader mbo{std::filesystem::path{opts.mbo_path}};
+  DbnReader mbp10{std::filesystem::path{opts.mbp10_path}};
+  require_same_window(mbp10.metadata(), mbo.metadata());
+
+  if (opts.book == BookChoice::kFast) {
+    FastBook book;
+    set_tick_sizes(book, read_catalog(opts.definition_path, mbo.metadata()));
+    return replay(book, mbo, mbp10, opts);
+  }
+  Book book;
+  return replay(book, mbo, mbp10, opts);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -265,6 +261,12 @@ int main(int argc, char** argv) {
     const bool has_value = i + 1 < argc;
     if (arg == "--mbp10" && has_value) {
       opts.mbp10_path = argv[++i];
+    } else if (arg == "--definition" && has_value) {
+      opts.definition_path = argv[++i];
+    } else if (arg == "--book" && has_value) {
+      if (!parse_book(argv[++i], opts.book)) {
+        return usage();
+      }
     } else if (arg == "--limit" && has_value) {
       if (!parse_u64(argv[++i], opts.limit)) {
         return usage();
@@ -276,6 +278,14 @@ int main(int argc, char** argv) {
 
   if (opts.mbp10_path.empty()) {
     std::fputs("book_diff: --mbp10 is what there is to diff against\n", stderr);
+    return usage();
+  }
+  if (opts.book == BookChoice::kFast && opts.definition_path.empty()) {
+    std::fprintf(stderr, "book_diff: %s\n", kFastNeedsDefinition);
+    return usage();
+  }
+  if (opts.book == BookChoice::kReference && !opts.definition_path.empty()) {
+    std::fputs("book_diff: --definition only gives --book fast its ticks\n", stderr);
     return usage();
   }
 
