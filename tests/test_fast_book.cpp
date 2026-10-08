@@ -39,6 +39,12 @@ struct FastBookProbe {
     n.prev = static_cast<std::uint32_t>(&n - book.nodes_.data());
   }
 
+  static void point_next_link_at_itself(FastBook& book, std::uint32_t instrument_id,
+                                        std::uint64_t order_id) {
+    FastBook::Node& n = node(book, instrument_id, order_id);
+    n.next = static_cast<std::uint32_t>(&n - book.nodes_.data());
+  }
+
   static void add_to_level_total(FastBook& book, std::uint32_t instrument_id,
                                  std::uint64_t order_id) {
     const FastBook::Node& n = node(book, instrument_id, order_id);
@@ -412,6 +418,16 @@ class FastBookVerify : public ::testing::Test {
 
 TEST_F(FastBookVerify, ABrokenBackLinkIsFound) {
   FastBookProbe::point_back_link_at_itself(book_, kIid, 2);
+  EXPECT_THROW(book_.verify(), BookError);
+}
+
+// Order 1 heads its level and now follows itself, so order 2 is unreachable
+// and a walk that trusted the links would never end. The views stop at the
+// level's count and leave the fault to verify().
+TEST_F(FastBookVerify, ALoopedQueueIsWalkedNoFurtherThanItsCount) {
+  FastBookProbe::point_next_link_at_itself(book_, kIid, 1);
+  EXPECT_EQ(queue_view(book_, kIid, Side::kBid, px(29000)), (std::vector<std::uint64_t>{1, 1}));
+  EXPECT_THROW((void)book_.queue_ahead(kIid, 2), BookError);
   EXPECT_THROW(book_.verify(), BookError);
 }
 

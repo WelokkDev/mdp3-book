@@ -342,13 +342,11 @@ void register_benchmarks(const Input& in) {
   day(benchmark::RegisterBenchmark("apply/fast", replay_input<FastBook, false>, &in));
   day(benchmark::RegisterBenchmark("apply_top_ten/reference", replay_input<Book, true>, &in));
   day(benchmark::RegisterBenchmark("apply_top_ten/fast", replay_input<FastBook, true>, &in));
-  for (const auto& [name, fn] :
-       {std::pair{"open_close_level/reference", open_and_close_level<Book>},
-        std::pair{"open_close_level/fast", open_and_close_level<FastBook>},
-        std::pair{"requeue/reference", requeue<Book>},
-        std::pair{"requeue/fast", requeue<FastBook>}}) {
-    benchmark::RegisterBenchmark(name, fn)->Arg(10)->Arg(100)->Arg(1000);
-  }
+  const auto sized = [](auto* b) { b->Arg(10)->Arg(100)->Arg(1000); };
+  sized(benchmark::RegisterBenchmark("open_close_level/reference", open_and_close_level<Book>));
+  sized(benchmark::RegisterBenchmark("open_close_level/fast", open_and_close_level<FastBook>));
+  sized(benchmark::RegisterBenchmark("requeue/reference", requeue<Book>));
+  sized(benchmark::RegisterBenchmark("requeue/fast", requeue<FastBook>));
 }
 
 }  // namespace

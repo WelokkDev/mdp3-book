@@ -395,6 +395,16 @@ TYPED_TEST(Cancel, EmptyingALevelErasesIt) {
   EXPECT_EQ(b.instruments(), (std::vector<std::uint32_t>{kIid}));
 }
 
+TYPED_TEST(Cancel, ErasesByIdWhateverSideTheRecordCarries) {
+  StreamBuilder s;
+  s.add(1, Side::kBid, px(29000), 5).add(2, Side::kBid, px(29000), 3).last();
+  s.cancel(1, Side::kNone, px(29000), 5).cancel(2, Side::kAsk, px(29000), 3).last();
+  const TypeParam b = replay<TypeParam>(s.records());
+
+  EXPECT_FALSE(has_level(b, Side::kBid, px(29000)));
+  EXPECT_EQ(b.order_count(), std::size_t{0});
+}
+
 TYPED_TEST(Cancel, AnUnknownOrderIsToleratedAndStillCountsAsOneMutation) {
   StreamBuilder s;
   s.cancel(999, Side::kBid, px(29000), 3).last();

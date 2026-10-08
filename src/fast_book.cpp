@@ -831,6 +831,8 @@ std::int64_t FastBook::best_ask(std::uint32_t instrument_id) const {
   return price_of(ins, Side::kAsk, ins.asks.best);
 }
 
+// A faulty book can link a queue into a cycle, so this walk and queue_view's
+// are bounded by the level's count: they end, and verify() says what is wrong.
 std::uint64_t FastBook::queue_ahead(std::uint32_t instrument_id, std::uint64_t order_id) const {
   const std::uint32_t instrument = find_instrument(instrument_id);
   if (instrument == kNil) {
@@ -841,10 +843,11 @@ std::uint64_t FastBook::queue_ahead(std::uint32_t instrument_id, std::uint64_t o
     return kNoQueuePosition;
   }
   const Node& n = nodes_[slot];
+  const Level& lvl = pages_[n.page]->levels[n.offset];
   std::uint64_t ahead = 0;
-  for (std::uint32_t queued = pages_[n.page]->levels[n.offset].head; queued != slot;
-       queued = nodes_[queued].next) {
-    if (queued == kNil) {
+  std::uint32_t queued = lvl.head;
+  for (std::uint32_t passed = 0; queued != slot; ++passed, queued = nodes_[queued].next) {
+    if (queued == kNil || passed == lvl.count) {
       throw BookError("resting order is missing from its level's queue");
     }
     ahead += nodes_[queued].size;
@@ -929,7 +932,10 @@ std::vector<std::uint64_t> queue_view(const FastBook& book, std::uint32_t instru
   if (lvl == nullptr) {
     return out;
   }
-  for (std::uint32_t slot = lvl->head; slot != FastBook::kNil; slot = book.nodes_[slot].next) {
+  out.reserve(lvl->count);
+  std::uint32_t slot = lvl->head;
+  for (std::uint32_t passed = 0; passed < lvl->count && slot != FastBook::kNil;
+       ++passed, slot = book.nodes_[slot].next) {
     out.push_back(book.nodes_[slot].order_id);
   }
   return out;

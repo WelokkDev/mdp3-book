@@ -14,8 +14,9 @@ struct Allocations {
   std::uint64_t count = 0;
   std::uint64_t bytes = 0;
 
-  /// Only the plain forms are counted. Nothing on either book's path asks for
-  /// over-aligned storage; the decoder's buffer does, and zstd calls malloc.
+  /// The plain and nothrow forms are counted; the over-aligned ones are not
+  /// replaced. Nothing on either book's path asks for over-aligned storage;
+  /// the decoder's buffer does, and zstd calls malloc.
   [[nodiscard]] static Allocations now() noexcept;
 
   [[nodiscard]] Allocations operator-(const Allocations& earlier) const noexcept {

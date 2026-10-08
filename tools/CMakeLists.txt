@@ -13,3 +13,7 @@ bookreplay_set_warnings(book_check)
 add_executable(book_diff book_diff.cpp)
 target_link_libraries(book_diff PRIVATE bookreplay::bookreplay)
 bookreplay_set_warnings(book_diff)
+
+add_executable(book_oracle book_oracle.cpp)
+target_link_libraries(book_oracle PRIVATE bookreplay::bookreplay)
+bookreplay_set_warnings(book_oracle)

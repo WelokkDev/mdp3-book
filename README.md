@@ -6,9 +6,9 @@ CME MDP 3.0 limit order book reconstruction from Databento DBN.
 driver, order-by-order book and instrument catalog are built and tested, and the
 book replays five real trading days with every invariant holding and its top ten
 levels matching the venue's own `mbp-10` at every event boundary. A second book,
-built for speed, applies a day in just over a quarter of the time and gives
-`book_check` and `book_diff` the same output on all five days. Nothing fills
-against either.
+built for speed, applies a day in just over a quarter of the time, and the first
+is its oracle: on every order a record names, every top ten and every queue at
+every audit, the two agree. Nothing fills against either.
 
 ## Why
 
@@ -39,10 +39,11 @@ pulled before the 2026-08-08 renormalization), and the 2026-08-24 to 28 corpus:
 103,318,862 `mbp-10` records, 638 `status` and 160 `definition`. All five schemas
 also round-trip against Databento's published fixtures. A test-only encoder
 generates streams the decoder has never seen: `ts_out` records, records
-straddling buffer refills, multi-frame zstd. Two differential
-oracles run against independent implementations, both pinned and neither linked
-into the library: `databento-dbn` locally, the only one that can see the licensed
-corpus, and `databento-cpp` in CI. The suite runs under ASan and UBSan.
+straddling buffer refills, multi-frame zstd. Two independent implementations
+are the decoder's differential oracles, both pinned and neither linked into the
+library: `databento-dbn`, run in CI on the fixtures and locally on the licensed
+corpus, which only it can see, and `databento-cpp`, run in CI. The suite runs
+under ASan and UBSan.
 
 Still open: `trades` is checked only against a two-record fixture, since `mbo`
 carries the prints this project uses and the schema was never pulled.
@@ -96,7 +97,7 @@ identical in aggregate to a shrink and still queues at the tail. The fill in
 front of the M separates the two: after an F, the M keeps priority only if its
 size is exactly what the fill left behind. A level total is the same either
 way, so no aggregate view can falsify that rule and the `mbp-10` diff will not
-settle it. Only fill ordering can.
+settle it. Only fill ordering can test it against the venue.
 
 The crossed-book invariant is checked per instrument, and only while the status
 schema says that instrument is trading. The venue reports a mid-session halt as
@@ -128,6 +129,27 @@ in the event it closes, on every record in the five days.
 
 What this cannot see is queue order. Force `Book::modify` to always re-queue
 and `book_diff` prints byte-identical output on all five days.
+
+## Queue order
+
+`FastBook` is a second order-by-order book, built for replay speed, and `Book`
+keeps its obvious containers because it is the fast book's oracle. `book_oracle`
+replays a day through both. After every add, cancel or modify that names an
+order it compares that order (side, price, size, attributed fill and the
+quantity queued ahead of it), the total and order count of the level it rests at
+and of the level it left, and both touches; after every fill, the attribution it
+made; at every event boundary, both touches and the top ten; every million
+records and at the end, all of both books, every queue in order, and each book's
+own consistency check. Across 2026-08-24 to 28 that is 117,790,822 order checks,
+2,387,610 fill checks, 116,244,478 boundary checks and 127 full audits, and the
+books never differ.
+
+This is what the `mbp-10` diff cannot see. The same always-re-queue fault, put
+in the fast book, leaves `book_diff --book fast` byte-identical on all five
+days, while `book_oracle` fails at record 3,506 of 2026-08-26, the first modify
+whose kept place shows: the reference holds the order at the front of its
+level, the fast book behind two lots. Both books apply one modify rule, so this
+checks the fast book against the reference, not the rule against the venue.
 
 ## Throughput
 
@@ -197,6 +219,8 @@ ctest --preset debug
 its ticks. On a day whose every price is on its grid it prints the same bytes as
 the default reference run; where the reference counts off-grid prices, the fast
 book stops at the first.
+`book_oracle DAY.mbo.dbn.zst --definition DAY.definition.dbn.zst` compares the
+two books.
 
 The benchmarks are off by default, since they fetch Google Benchmark, pinned by
 tarball hash like zstd. Given no file they replay a synthetic stream, which is
@@ -224,8 +248,8 @@ ctest --test-dir build -L python
 
 CI builds GCC and Clang on Linux, AppleClang on macOS and MSVC on Windows, all
 with warnings as errors, runs the suite under ASan and UBSan, builds the Python
-module on Linux and Windows, runs both oracles, and runs every benchmark for one
-iteration on the synthetic stream.
+module on Linux and Windows, runs both decoder oracles, and runs every benchmark
+for one iteration on the synthetic stream.
 
 ## Corpus
 

@@ -2,10 +2,9 @@
 //
 // This is the reference implementation: obvious containers, no attempt at
 // speed. It survives the fast book rather than being replaced by it, because
-// it is the oracle `FastBook` is differentially tested against, the same way
-// databento-dbn is the oracle for the decoder.
-// An oracle that quietly repairs itself is worthless, so an internal
-// inconsistency here throws rather than clamps.
+// it is the oracle `FastBook` is differentially tested against. An oracle that
+// quietly repairs itself is worthless, so an internal inconsistency here
+// throws rather than clamps.
 
 #ifndef BOOKREPLAY_BOOK_HPP
 #define BOOKREPLAY_BOOK_HPP

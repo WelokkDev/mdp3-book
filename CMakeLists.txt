@@ -41,6 +41,7 @@ include(Zstd)
 
 add_library(bookreplay
   src/book.cpp
+  src/book_oracle.cpp
   src/book_view.cpp
   src/dbn.cpp
   src/dbn_reader.cpp

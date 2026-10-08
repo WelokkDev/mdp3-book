@@ -123,15 +123,18 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libssl-dev libzstd-dev
 
       # Pinned. An oracle that drifts is not an oracle.
+      # Ninja, not Make: under Make a bare --parallel is `make -j` with no
+      # limit, which starts every translation unit at once and gets the step
+      # killed on a four-core runner.
       - name: Build and install databento-cpp
         run: |
           git clone --depth 1 --branch v0.64.0 https://github.com/databento/databento-cpp.git ${{ runner.temp }}/databento-cpp
-          cmake -S ${{ runner.temp }}/databento-cpp -B ${{ runner.temp }}/databento-cpp/build \
+          cmake -S ${{ runner.temp }}/databento-cpp -B ${{ runner.temp }}/databento-cpp/build -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_INSTALL_PREFIX=/usr/local \
             -DDATABENTO_ENABLE_UNIT_TESTING=OFF \
             -DDATABENTO_ENABLE_EXAMPLES=OFF
-          cmake --build ${{ runner.temp }}/databento-cpp/build --target databento --parallel
+          cmake --build ${{ runner.temp }}/databento-cpp/build --target databento
           sudo cmake --install ${{ runner.temp }}/databento-cpp/build
 
       # Both sides must link the same zstd, or one binary carries two copies.

@@ -13,6 +13,7 @@ FetchContent_MakeAvailable(googletest)
 
 add_executable(bookreplay_tests
   test_book.cpp
+  test_book_oracle.cpp
   test_dbn_layout.cpp
   test_dbn_reader.cpp
   test_dbn_roundtrip.cpp
