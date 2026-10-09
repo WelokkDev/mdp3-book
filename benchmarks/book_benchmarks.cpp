@@ -263,7 +263,9 @@ B ladder_book(std::size_t depth) {
       s.add(id++, Side::kAsk, testing::px(29000, 2 + ticks), 5);
     }
   }
-  s.last();
+  if (!s.records().empty()) {
+    s.last();
+  }
   for (const MboMsg& rec : s.records()) {
     book.apply(rec);
   }

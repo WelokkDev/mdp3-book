@@ -251,9 +251,12 @@ TEST(BookOracle, TwoReferenceBooksAgreeAndEveryCheckIsCounted) {
   std::uint64_t boundaries = 0;
   for (const MboMsg& rec : records) {
     const Action action = action_of(rec);
-    named +=
-        (action == Action::kAdd || action == Action::kCancel || action == Action::kModify) ? 1 : 0;
-    boundaries += is_event_boundary(rec) ? 1 : 0;
+    if (action == Action::kAdd || action == Action::kCancel || action == Action::kModify) {
+      ++named;
+    }
+    if (is_event_boundary(rec)) {
+      ++boundaries;
+    }
   }
 
   Book candidate;
