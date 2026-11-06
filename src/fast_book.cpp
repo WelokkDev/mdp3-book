@@ -162,6 +162,7 @@ void FastBook::take(FastBook& other) noexcept {
   mutations_ = std::exchange(other.mutations_, 0);
   unknown_modifies_ = std::exchange(other.unknown_modifies_, 0);
   duplicate_adds_ = std::exchange(other.duplicate_adds_, 0);
+  stamps_ = std::exchange(other.stamps_, 0);
   growth_ = std::exchange(other.growth_, Growth{});
 }
 
@@ -398,6 +399,7 @@ void FastBook::link(std::uint32_t slot, std::uint32_t page, std::uint32_t offset
   Node& n = nodes_[slot];
   n.page = page;
   n.offset = offset;
+  n.stamp = ++stamps_;
   n.prev = lvl.tail;
   n.next = kNil;
   if (lvl.tail == kNil) {
@@ -530,7 +532,7 @@ void FastBook::modify(const MboMsg& rec) {
   }
 
   Node& n = nodes_[slot];
-  if (!keeps_priority(Book::Resting{n.side, n.price, n.size, n.filled}, rec)) {
+  if (!keeps_priority(Book::Resting{n.side, n.price, n.size, n.filled, n.stamp}, rec)) {
     const std::uint32_t page = page_for(instrument, side, key);
     unlink(slot);
     n.side = side;
@@ -733,6 +735,7 @@ void FastBook::verify() const {
             best_page = entry.page;
           }
           std::uint64_t total = 0;
+          std::uint64_t stamp = 0;
           std::uint32_t count = 0;
           std::uint32_t prev = kNil;
           for (std::uint32_t slot = lvl.head; slot != kNil; slot = nodes_[slot].next) {
@@ -754,6 +757,10 @@ void FastBook::verify() const {
             if (ids_.find(instrument, n.order_id) != slot) {
               throw BookError("a queued order is not the one its id finds");
             }
+            if (n.stamp <= stamp) {
+              throw BookError("a level's queue does not ascend by stamp");
+            }
+            stamp = n.stamp;
             total += n.size;
             ++count;
             prev = slot;
@@ -899,7 +906,7 @@ std::optional<RestingView> resting_view(const FastBook& book, std::uint32_t inst
     return std::nullopt;
   }
   const FastBook::Node& n = book.nodes_[slot];
-  return RestingView{n.side, n.price, n.size, n.filled};
+  return RestingView{n.side, n.price, n.size, n.filled, n.stamp};
 }
 
 std::optional<LevelView> level_view(const FastBook& book, std::uint32_t instrument_id, Side side,

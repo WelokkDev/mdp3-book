@@ -99,6 +99,12 @@ size is exactly what the fill left behind. A level total is the same either
 way, so no aggregate view can falsify that rule and the `mbp-10` diff will not
 settle it. Only fill ordering can test it against the venue.
 
+Each order is stamped from a counter as it is queued, a re-queue included, so a
+level's queue ascends by stamp and `verify()` checks that it does. The stamp is
+what lets something outside the book hold a place in it: one number, with every
+order stamped at or below it ahead, and an order that loses priority moving
+behind without anything being told.
+
 The crossed-book invariant is checked per instrument, and only while the status
 schema says that instrument is trading. The venue reports a mid-session halt as
 a pre-open carrying a market-event reason rather than as a halt action; NQ did
@@ -135,21 +141,23 @@ and `book_diff` prints byte-identical output on all five days.
 `FastBook` is a second order-by-order book, built for replay speed, and `Book`
 keeps its obvious containers because it is the fast book's oracle. `book_oracle`
 replays a day through both. After every add, cancel or modify that names an
-order it compares that order (side, price, size, attributed fill and the
-quantity queued ahead of it), the total and order count of the level it rests at
-and of the level it left, and both touches; after every fill, the attribution it
-made; at every event boundary, both touches and the top ten; every million
-records and at the end, all of both books, every queue in order, and each book's
-own consistency check. Across 2026-08-24 to 28 that is 117,790,822 order checks,
-2,387,610 fill checks, 116,244,478 boundary checks and 127 full audits, and the
-books never differ.
+order it compares that order (side, price, size, attributed fill, its stamp and
+the quantity queued ahead of it), the total and order count of the level it
+rests at and of the level it left, and both touches; after every fill, the
+attribution it made; at every event boundary, both touches and the top ten;
+every million records and at the end, all of both books, every queue in order,
+and each book's own consistency check. Summed over its runs on
+2026-08-24 to 28 that is 117,790,822 order checks, 2,387,610 fill checks,
+116,244,478 boundary checks and 127 full audits, and the books never differ.
 
 This is what the `mbp-10` diff cannot see. The same always-re-queue fault, put
 in the fast book, leaves `book_diff --book fast` byte-identical on all five
-days, while `book_oracle` fails at record 3,506 of 2026-08-26, the first modify
-whose kept place shows: the reference holds the order at the front of its
-level, the fast book behind two lots. Both books apply one modify rule, so this
-checks the fast book against the reference, not the rule against the venue.
+days, while `book_oracle` fails at record 3,480 of 2026-08-26, on the stamp of
+the first order a modify should have left in place, and at record 3,506 on the
+first whose kept place shows: the reference holds the order at the front of its
+level, the fast book behind two lots. Both books apply one modify rule, so
+this checks the fast book against the reference, not the rule against the
+venue.
 
 ## Throughput
 

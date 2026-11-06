@@ -56,6 +56,11 @@ struct FastBookProbe {
     const FastBook::Node& n = node(book, instrument_id, order_id);
     book.pages_[n.page]->words[n.offset >> 6] &= ~(std::uint64_t{1} << (n.offset & 63));
   }
+
+  static void stamp(FastBook& book, std::uint32_t instrument_id, std::uint64_t order_id,
+                    std::uint64_t stamp) {
+    node(book, instrument_id, order_id).stamp = stamp;
+  }
 };
 
 namespace {
@@ -353,6 +358,7 @@ void expect_same_after(const Book& reference, const FastBook& fast, const MboMsg
     EXPECT_EQ(ours->price, theirs->price);
     EXPECT_EQ(ours->size, theirs->size);
     EXPECT_EQ(ours->filled, theirs->filled);
+    EXPECT_EQ(ours->stamp, theirs->stamp);
   }
   if (is_event_boundary(rec)) {
     const std::optional<DepthMismatch> mismatch =
@@ -433,6 +439,13 @@ TEST_F(FastBookVerify, ALoopedQueueIsWalkedNoFurtherThanItsCount) {
 
 TEST_F(FastBookVerify, ALevelTotalOutOfStepWithItsQueueIsFound) {
   FastBookProbe::add_to_level_total(book_, kIid, 1);
+  EXPECT_THROW(book_.verify(), BookError);
+}
+
+// Order 2 queues behind order 1 and now carries order 1's stamp, which is no
+// place in the queue at all: the links put it behind and the stamp does not.
+TEST_F(FastBookVerify, AQueueOutOfStampOrderIsFound) {
+  FastBookProbe::stamp(book_, kIid, 2, FastBookProbe::node(book_, kIid, 1).stamp);
   EXPECT_THROW(book_.verify(), BookError);
 }
 

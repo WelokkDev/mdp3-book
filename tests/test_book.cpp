@@ -1,7 +1,6 @@
 #include "bookreplay/book.hpp"
 #include "bookreplay/book_view.hpp"
 #include "bookreplay/dbn.hpp"
-#include "bookreplay/fast_book.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -66,6 +65,13 @@ template <typename B>
   return level_view(b, instrument_id, side, price).has_value();
 }
 
+template <typename B>
+[[nodiscard]] std::uint64_t stamp_of(const B& b, std::uint64_t order_id,
+                                     std::uint32_t instrument_id = kIid) {
+  const std::optional<RestingView> o = resting_view(b, instrument_id, order_id);
+  return o ? o->stamp : 0;
+}
+
 BOOKREPLAY_BOOK_SUITE(Queue);
 BOOKREPLAY_BOOK_SUITE(Add);
 BOOKREPLAY_BOOK_SUITE(Modify);
@@ -75,6 +81,7 @@ BOOKREPLAY_BOOK_SUITE(Cancel);
 BOOKREPLAY_BOOK_SUITE(Clear);
 BOOKREPLAY_BOOK_SUITE(MutationCount);
 BOOKREPLAY_BOOK_SUITE(Reset);
+BOOKREPLAY_BOOK_SUITE(Stamp);
 BOOKREPLAY_BOOK_SUITE(BookVsToy);
 
 TYPED_TEST(Queue, ThreeAddsAtOneLevelRestInArrivalOrder) {
@@ -483,6 +490,88 @@ TYPED_TEST(Reset, DropsEveryInstrumentAndKeepsEveryCounter) {
   // audit: what the stream got wrong before it stays counted.
   EXPECT_EQ(b.mutation_count(), std::uint64_t{2});
   EXPECT_EQ(b.unknown_modifies(), std::uint64_t{1});
+}
+
+TYPED_TEST(Stamp, OneCounterRunsAcrossEveryLevelAndInstrument) {
+  StreamBuilder s;
+  s.add(1, Side::kBid, px(29000), 5).add(2, Side::kAsk, px(29000, 1), 4);
+  s.instrument(kOtherIid).add(10, Side::kBid, px(28000), 3).last();
+  s.instrument(kIid).add(3, Side::kBid, px(29000), 2).last();
+  const TypeParam b = replay<TypeParam>(s.records());
+
+  EXPECT_EQ(stamp_of(b, 1), std::uint64_t{1});
+  EXPECT_EQ(stamp_of(b, 2), std::uint64_t{2});
+  EXPECT_EQ(stamp_of(b, 10, kOtherIid), std::uint64_t{3});
+  EXPECT_EQ(stamp_of(b, 3), std::uint64_t{4});
+  EXPECT_EQ(b.last_stamp(), std::uint64_t{4});
+}
+
+TYPED_TEST(Stamp, AnOrderThatKeepsItsPlaceKeepsItsStamp) {
+  StreamBuilder s;
+  s.add(1, Side::kBid, px(29000), 5).add(2, Side::kBid, px(29000), 7);
+  s.modify(1, Side::kBid, px(29000), 2).last();
+  s.trade(Side::kAsk, px(29000), 1).fill(1, Side::kBid, px(29000), 1);
+  s.modify(1, Side::kBid, px(29000), 1).last();
+  const TypeParam b = replay<TypeParam>(s.records());
+
+  EXPECT_EQ(stamp_of(b, 1), std::uint64_t{1});
+  EXPECT_EQ(b.last_stamp(), std::uint64_t{2});
+}
+
+TYPED_TEST(Stamp, AnOrderThatLosesItsPlaceIsStampedBehindWhatArrivedSince) {
+  StreamBuilder s;
+  s.add(1, Side::kBid, px(29000), 5).add(2, Side::kBid, px(29000), 7);
+  s.add(3, Side::kBid, px(28999, 3), 4);
+  s.modify(1, Side::kBid, px(29000), 9).last();
+  s.modify(3, Side::kBid, px(29000), 4).last();
+  s.trade(Side::kAsk, px(29000), 7).fill(2, Side::kBid, px(29000), 7);
+  s.modify(2, Side::kBid, px(29000), 7).last();
+  const TypeParam b = replay<TypeParam>(s.records());
+
+  // Grown, moved to another price, and refreshed after a fill, in that order.
+  EXPECT_EQ(stamp_of(b, 1), std::uint64_t{4});
+  EXPECT_EQ(stamp_of(b, 3), std::uint64_t{5});
+  EXPECT_EQ(stamp_of(b, 2), std::uint64_t{6});
+  EXPECT_EQ(queue_at(b, Side::kBid, px(29000)), (std::vector<std::uint64_t>{1, 3, 2}));
+}
+
+TYPED_TEST(Stamp, ARecordThatQueuesNothingTakesNone) {
+  StreamBuilder s;
+  s.add(1, Side::kBid, px(29000), 5);
+  s.add(2, Side::kNone, px(29000), 5).add(0, Side::kBid, px(29000), 5);
+  s.cancel(9, Side::kBid, px(29000), 5).fill(1, Side::kBid, px(29000), 5);
+  s.trade(Side::kAsk, px(29000), 5).none();
+  const TypeParam b = replay<TypeParam>(s.records());
+
+  EXPECT_EQ(b.last_stamp(), std::uint64_t{1});
+}
+
+TYPED_TEST(Stamp, AResetNeverHandsOneOutTwice) {
+  StreamBuilder s;
+  s.add(1, Side::kBid, px(29000), 5).add(2, Side::kBid, px(29000), 5).last();
+  TypeParam b = replay<TypeParam>(s.records());
+
+  b.reset();
+  b.apply(s.records().front());
+
+  EXPECT_EQ(stamp_of(b, 1), std::uint64_t{3});
+}
+
+// Order 2 queues behind order 1 and is given order 1's stamp, which is no
+// place in the queue at all. The entry is the book's own and not const; only
+// the pointer `order()` hands out is.
+TEST(BookVerify, AQueueOutOfStampOrderIsFound) {
+  StreamBuilder s;
+  s.add(1, Side::kBid, px(29000), 5).add(2, Side::kBid, px(29000), 7).last();
+  Book b = replay<Book>(s.records());
+  const Book::Resting* ahead = b.order(kIid, 1);
+  const Book::Resting* behind = b.order(kIid, 2);
+  ASSERT_NE(ahead, nullptr);
+  ASSERT_NE(behind, nullptr);
+
+  const_cast<Book::Resting*>(behind)->stamp = ahead->stamp;
+
+  EXPECT_THROW(b.verify(), BookError);
 }
 
 // run_checked over the shared fixtures lives in test_invariants.cpp, beside

@@ -20,11 +20,14 @@ add_executable(bookreplay_tests
   test_definition.cpp
   test_fast_book.cpp
   test_invariants.cpp
+  test_mbo_source.cpp
   test_mbp10_diff.cpp
   test_naked_window.cpp
   test_order.cpp
+  test_queue_positions.cpp
   test_replay.cpp
   test_replay_invariants.cpp
+  test_session_gate.cpp
   test_trade_source.cpp
 )
 

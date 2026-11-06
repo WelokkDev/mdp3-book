@@ -2,6 +2,7 @@
 #define BOOKREPLAY_REPLAY_HPP
 
 #include "bookreplay/order.hpp"
+#include "bookreplay/order_ledger.hpp"
 #include "bookreplay/trade_source.hpp"
 
 #include <cstddef>
@@ -32,27 +33,13 @@ struct ReplayConfig {
   bool retain_ticks = false;
 };
 
-struct ReplayStats {
+struct ReplayStats : OrderLedgerStats {
   std::uint64_t ticks = 0;
   std::uint64_t no_aggressor_ticks = 0;
   /// Prints through a resting order's price that kNeitherSide refused.
   std::uint64_t no_aggressor_passive_skips = 0;
   /// Contracts filled a tick off the print because the other side aggressed it.
   std::uint64_t tick_charged_qty = 0;
-  std::uint64_t elections = 0;
-  /// Stops whose trigger was already through the last print when they armed.
-  std::uint64_t stop_entry_rejects = 0;
-  std::uint64_t fills = 0;
-  std::uint64_t partial_fills = 0;
-  std::uint64_t oco_reductions = 0;
-  std::uint64_t oco_cancels = 0;
-  std::uint64_t cancels_applied = 0;
-  /// Orders whose effective live instant was already behind the cursor at
-  /// submit; accepted, not clamped.
-  std::uint64_t late_arm_orders = 0;
-  std::uint64_t late_arm_ns_total = 0;
-  /// Growth of the per-advance fill and tick buffers.
-  std::uint64_t reallocations = 0;
 };
 
 class Replay {

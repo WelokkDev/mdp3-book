@@ -1,6 +1,7 @@
 // Read-only copies of what a book holds, the same shape whichever book they
 // came from, so a test or a comparison can ask two books the same question.
-// The two that return vectors allocate; they are for audits and tests.
+// The two that return vectors allocate. They are for audits, for tests, and
+// for work done once an order, never once a record.
 
 #ifndef BOOKREPLAY_BOOK_VIEW_HPP
 #define BOOKREPLAY_BOOK_VIEW_HPP

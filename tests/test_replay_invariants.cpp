@@ -224,6 +224,26 @@ TEST(IgnoresCancelLatency, TripsCausalityByFillingAfterTheEffectiveCancel) {
   EXPECT_EQ(harness.report().causality_violations, k1);
 }
 
+TEST(VenueClock, ARestingOrderCannotFillInTheEventItArrivedIn) {
+  // The order reaches the venue at the print's own ts_event. The toy engine
+  // judges arrival on ts_recv, which trails it, and so still fills the order.
+  const Latency latency{kMs - testing::kTsInDelta, 0, 0};
+  Order resting = order_of(1, OrderType::kLimit, Side::kAsk, 1);
+  resting.limit_ticks = tk(29000, 0);
+
+  ToyReplayBase on_capture{one_print(5), latency, TickScale{kTick}};
+  ReplayHarness capture{on_capture, latency};
+  capture.submit(resting);
+  EXPECT_EQ(capture.advance_to(kT0 + 10 * kMs).size(), std::size_t{1});
+  EXPECT_TRUE(capture.ok());
+
+  ToyReplayBase on_venue{one_print(5), latency, TickScale{kTick}};
+  ReplayHarness venue{on_venue, latency, {.live_window_on_ts_event = true}};
+  venue.submit(resting);
+  EXPECT_EQ(venue.advance_to(kT0 + 10 * kMs).size(), std::size_t{1});
+  EXPECT_EQ(venue.report().causality_violations, k1);
+}
+
 TEST(Overfills, TripsQuantityConservation) {
   OverfillReplay driver{one_print(3), Latency{0, 0, 0}, TickScale{kTick}};
   ReplayHarness harness{driver, Latency{0, 0, 0}};

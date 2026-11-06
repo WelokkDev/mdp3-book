@@ -59,7 +59,7 @@ concept InspectableBook =
 
 enum class OracleDifferenceKind : std::uint8_t {
   kResting,     ///< an order a record or a queue names rests in one book only
-  kOrder,       ///< an order rests in both with another side, price, size or fill
+  kOrder,       ///< an order rests in both with another side, price, size, fill or stamp
   kQueueAhead,  ///< an order rests in both with another quantity ahead of it
   kLevelTotal,
   kLevelCount,
@@ -185,6 +185,11 @@ class BookOracle {
     std::int64_t price = 0;
   };
 
+  struct Resting {
+    RestingView reference;
+    RestingView candidate;
+  };
+
   // A book erases a cancelled order by its id alone, so a cancel names one
   // whatever side it carries. An add or a modify has to say where it rests.
   [[nodiscard]] static bool names_order(const MboMsg& rec) noexcept {
@@ -199,21 +204,24 @@ class BookOracle {
   void check_order(const MboMsg& rec) {
     ++report_.order_checks;
     const std::uint32_t instrument_id = rec.hd.instrument_id;
-    const std::optional<RestingView> in_reference =
+    const std::optional<Resting> resting =
         compare_resting(instrument_id, rec.order_id, side_of(rec), rec.price);
-    if (in_reference) {
+    if (resting) {
       const std::uint64_t reference_ahead = reference_->queue_ahead(instrument_id, rec.order_id);
       const std::uint64_t candidate_ahead = candidate_->queue_ahead(instrument_id, rec.order_id);
       if (reference_ahead != candidate_ahead) {
         OracleDifference d =
             difference(OracleDifferenceKind::kQueueAhead, "queue_ahead", instrument_id);
         d.order_id = rec.order_id;
-        d.side = in_reference->side;
-        d.price = in_reference->price;
+        d.side = resting->reference.side;
+        d.price = resting->reference.price;
         d.reference = static_cast<std::int64_t>(reference_ahead);
         d.candidate = static_cast<std::int64_t>(candidate_ahead);
         record(d);
       }
+      // After the quantity ahead: where both differ, that one says what the
+      // fault cost the order, and the stamp only that there was one.
+      compare_stamp(instrument_id, rec.order_id, *resting);
     }
     compare_level_at(instrument_id, side_of(rec), rec.price);
     if (left_ && (left_->side != side_of(rec) || left_->price != rec.price)) {
@@ -226,11 +234,11 @@ class BookOracle {
     (void)compare_resting(rec.hd.instrument_id, rec.order_id, side_of(rec), rec.price);
   }
 
-  /// The reference's view of the order if it rests in both books, else empty.
-  /// Resting in one only is reported here, and the empty return keeps
-  /// check_order from reporting it again as a queue position.
-  std::optional<RestingView> compare_resting(std::uint32_t instrument_id, std::uint64_t order_id,
-                                             Side side, std::int64_t price) {
+  /// Both books' views of the order if it rests in both, else empty. Resting
+  /// in one only is reported here, and the empty return keeps check_order from
+  /// reporting it again as a queue position.
+  std::optional<Resting> compare_resting(std::uint32_t instrument_id, std::uint64_t order_id,
+                                         Side side, std::int64_t price) {
     const std::optional<RestingView> in_reference =
         resting_view(*reference_, instrument_id, order_id);
     const std::optional<RestingView> in_candidate =
@@ -245,10 +253,11 @@ class BookOracle {
       record(d);
       return std::nullopt;
     }
-    if (in_reference) {
-      compare_order(instrument_id, order_id, *in_reference, *in_candidate);
+    if (!in_reference) {
+      return std::nullopt;
     }
-    return in_reference;
+    compare_order(instrument_id, order_id, *in_reference, *in_candidate);
+    return Resting{*in_reference, *in_candidate};
   }
 
   void compare_level_at(std::uint32_t instrument_id, Side side, std::int64_t price) {
@@ -371,7 +380,10 @@ class BookOracle {
       }
     }
     for (const std::uint64_t order_id : in_reference) {
-      (void)compare_resting(instrument_id, order_id, side, price);
+      if (const std::optional<Resting> resting =
+              compare_resting(instrument_id, order_id, side, price)) {
+        compare_stamp(instrument_id, order_id, *resting);
+      }
     }
   }
 
@@ -406,6 +418,18 @@ class BookOracle {
     d.reference = reference_value;
     d.candidate = candidate_value;
     record(d);
+  }
+
+  void compare_stamp(std::uint32_t instrument_id, std::uint64_t order_id, const Resting& resting) {
+    if (resting.reference.stamp != resting.candidate.stamp) {
+      OracleDifference d = difference(OracleDifferenceKind::kOrder, "stamp", instrument_id);
+      d.order_id = order_id;
+      d.side = resting.reference.side;
+      d.price = resting.reference.price;
+      d.reference = static_cast<std::int64_t>(resting.reference.stamp);
+      d.candidate = static_cast<std::int64_t>(resting.candidate.stamp);
+      record(d);
+    }
   }
 
   void compare_level(std::uint32_t instrument_id, Side side, const LevelView& in_reference,

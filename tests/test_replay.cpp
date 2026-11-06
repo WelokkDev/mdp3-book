@@ -418,6 +418,15 @@ TEST(Stop, FillsAtTheElectingPrintPriceWithNoAdditionalClientLatency) {
   EXPECT_EQ(fills[0].ts_ns, r->order(1).elected_ns);
 }
 
+TEST(Stop, KeepsTheElectingPrintsVenueInstantBesideItsCaptureInstant) {
+  auto r = replay_over(rising(), cfg());
+  r->submit(stop(1, Side::kBid, tk(29000, 1), 1, kT0));
+
+  (void)r->advance_to(kT0 + 10 * kMs);
+  EXPECT_EQ(r->order(1).elected_ns, kT0 + kMs);
+  EXPECT_EQ(r->order(1).elected_ts_event, kT0 + kMs - testing::kTsInDelta);
+}
+
 TEST(Stop, AnElectingPrintFromTheOtherSideCostsTheSameTickAsAMarketOrder) {
   TradeStreamBuilder b;
   b.trade(Side::kBid, px(29000, 1), 5);

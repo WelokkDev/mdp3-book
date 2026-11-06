@@ -94,7 +94,7 @@ inline constexpr std::uint64_t kDecemberExpiry = 1'797'604'200'000'000'000ULL;  
 
 /// One status record. `is_trading` is a parameter of its own rather than
 /// something derived from the action, because the venue sets the two
-/// independently: a halt arrives as a pre-open that is simply not trading.
+/// independently: a halt arrives as a pre-open that is not trading.
 [[nodiscard]] inline StatusMsg status(std::uint32_t instrument_id, std::uint16_t action,
                                       char is_trading, char is_quoting = kTriStateYes,
                                       std::uint64_t ts_event = kBaseTs) {
@@ -144,6 +144,13 @@ class StreamBuilder {
   /// a buy lifting the offer. It carries no resting order_id.
   StreamBuilder& trade(Side side, std::int64_t price, std::uint32_t size) {
     push('T', side, 0, price, size);
+    return *this;
+  }
+
+  /// Names the order that aggressed, on the print just pushed. The venue
+  /// does; most tests here have no use for it.
+  StreamBuilder& aggressor(std::uint64_t order_id) {
+    records_.back().order_id = order_id;
     return *this;
   }
 
@@ -223,10 +230,7 @@ class StreamBuilder {
   std::vector<MboMsg> records_;
 };
 
-/// A two-sided book with a one-tick spread, delivered as a snapshot.
-///
-///   bids  29000.00 (o100, 10)   28999.75 (o101, 7)
-///   asks  29000.25 (o200, 10)   29000.50 (o201, 7)
+/// A two-sided book with a one-tick spread.
 inline StreamBuilder opening_snapshot() {
   StreamBuilder b;
   b.clear();
@@ -242,7 +246,7 @@ inline std::vector<MboMsg> iceberg_then_market_moves_up() {
 
   b.trade(Side::kBid, px(29000, 1), 5);
   b.fill(999'999, Side::kAsk, px(29000, 1), 5);  // order_id never Added
-  b.none();                                      // standalone F_LAST carrier
+  b.none();
 
   b.cancel(200, Side::kAsk, px(29000, 1), 10);
   b.cancel(201, Side::kAsk, px(29000, 2), 7).last();

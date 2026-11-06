@@ -122,6 +122,35 @@ def test_a_stop_is_elected_by_a_print_at_its_trigger() -> None:
     assert replay.stats.elections == 1
 
 
+def test_a_stop_keeps_the_electing_prints_venue_instant_beside_its_capture() -> None:
+    ticks = br.ticks_from(
+        [
+            br.Tick(
+                ts=T0 + MS,
+                ts_event=T0 + MS - 500,
+                price=px(29000, 1),
+                size=5,
+                aggressor=br.Side.BID,
+            )
+        ]
+    )
+    replay = br.Replay(ticks, config())
+    replay.submit(
+        br.Order(
+            id=1,
+            type=br.OrderType.STOP,
+            side=br.Side.BID,
+            qty=1,
+            live_from_ns=T0,
+            trigger_ticks=tk(29000, 1),
+        )
+    )
+
+    replay.advance_to(T0 + 10 * MS)
+    assert replay.order(1).elected_ns == T0 + MS
+    assert replay.order(1).elected_ts_event == T0 + MS - 500
+
+
 def test_oco_is_quantity_linked_rather_than_cancel_on_first_fill() -> None:
     ticks = br.ticks_from(
         [br.Tick(ts=T0 + MS, price=px(29000, 1), size=3, aggressor=br.Side.BID)]

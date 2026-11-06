@@ -297,8 +297,6 @@ TEST(SessionMapping, IsTradingDecidesAndTheActionOnlyNamesTheRest) {
     SessionState expected;
   };
 
-  // The first four are every shape five real NQ days produced; the rest are
-  // what the enum allows and another day could.
   constexpr Case kCases[] = {
       {kStatusActionTrading, kTriStateYes, SessionState::kTrading},
       {kStatusActionNewPriceIndication, kTriStateYes, SessionState::kTrading},
@@ -320,7 +318,7 @@ TEST(SessionMapping, IsTradingDecidesAndTheActionOnlyNamesTheRest) {
   }
 }
 
-TEST(SessionGate, AnInstrumentNoStatusRecordDescribedIsNotChecked) {
+TEST(CrossedCheckGate, AnInstrumentNoStatusRecordDescribedIsNotChecked) {
   StreamBuilder b = testing::opening_snapshot();
   b.add(500, Side::kAsk, px(28999, 0), 5).last();
 
@@ -335,7 +333,7 @@ TEST(SessionGate, AnInstrumentNoStatusRecordDescribedIsNotChecked) {
   EXPECT_TRUE(harness.ok());
 }
 
-TEST(SessionGate, TheOpenTurnsTheCheckOnMidStream) {
+TEST(CrossedCheckGate, TheOpenTurnsTheCheckOnMidStream) {
   StreamBuilder b = testing::opening_snapshot();
   b.add(500, Side::kAsk, px(28999, 0), 5).last();
   b.add(501, Side::kAsk, px(28999, 0), 5).last();
@@ -359,7 +357,7 @@ TEST(SessionGate, TheOpenTurnsTheCheckOnMidStream) {
   EXPECT_EQ(harness.report().violations.front().invariant, Invariant::kUncrossedBook);
 }
 
-TEST(SessionGate, AHaltTurnsTheCheckBackOff) {
+TEST(CrossedCheckGate, AHaltTurnsTheCheckBackOff) {
   StreamBuilder b = testing::opening_snapshot();
   b.add(500, Side::kAsk, px(28999, 0), 5).last();
   b.add(501, Side::kAsk, px(28999, 0), 5).last();
@@ -382,7 +380,7 @@ TEST(SessionGate, AHaltTurnsTheCheckBackOff) {
   EXPECT_EQ(harness.report().boundaries_outside_trading, k1);
 }
 
-TEST(SessionGate, AStatusRecordTheMappingCannotPlaceStopsTheCheck) {
+TEST(CrossedCheckGate, AStatusRecordTheMappingCannotPlaceStopsTheCheck) {
   StreamBuilder b = testing::opening_snapshot();
   b.add(500, Side::kAsk, px(28999, 0), 5).last();
 
@@ -399,7 +397,7 @@ TEST(SessionGate, AStatusRecordTheMappingCannotPlaceStopsTheCheck) {
   EXPECT_EQ(harness.report().cross_violations, k0);
 }
 
-TEST(SessionGate, StateIsPerInstrument) {
+TEST(CrossedCheckGate, StateIsPerInstrument) {
   StreamBuilder b = testing::opening_snapshot();
   b.add(500, Side::kAsk, px(28999, 0), 5).last();
   const std::uint32_t open_instrument = b.instrument_id();
@@ -420,7 +418,7 @@ TEST(SessionGate, StateIsPerInstrument) {
   EXPECT_EQ(harness.report().violations.front().instrument_id, open_instrument);
 }
 
-TEST(SessionGate, AStatusRecordOverridesThePinnedDefault) {
+TEST(CrossedCheckGate, AStatusRecordOverridesThePinnedDefault) {
   StreamBuilder b = testing::opening_snapshot();
   b.add(500, Side::kAsk, px(28999, 0), 5).last();
 

@@ -36,6 +36,7 @@ void verify_side(const std::unordered_map<std::uint64_t, Book::Resting>& orders,
       throw BookError("a level with no orders is still in the map");
     }
     std::uint64_t total = 0;
+    std::uint64_t stamp = 0;
     for (const std::uint64_t id : lvl.queue) {
       const auto it = orders.find(id);
       if (it == orders.end() || it->second.side != side || it->second.price != price) {
@@ -44,6 +45,10 @@ void verify_side(const std::unordered_map<std::uint64_t, Book::Resting>& orders,
       if (!queued.insert(id).second) {
         throw BookError("an order id is queued twice");
       }
+      if (it->second.stamp <= stamp) {
+        throw BookError("a level's queue does not ascend by stamp");
+      }
+      stamp = it->second.stamp;
       total += it->second.size;
     }
     if (total != lvl.size) {
@@ -72,8 +77,8 @@ Book::Level* Book::level_in(Instrument& b, Side side, std::int64_t price) {
 }
 
 void Book::insert(Instrument& b, std::uint64_t order_id, Side side, std::int64_t price,
-                  std::uint32_t size) {
-  b.orders[order_id] = Resting{side, price, size, 0};
+                  std::uint32_t size, std::uint64_t stamp) {
+  b.orders[order_id] = Resting{side, price, size, 0, stamp};
   Level& lvl = (side == Side::kBid) ? b.bids[price] : b.asks[price];
   lvl.queue.push_back(order_id);
   lvl.size += size;
@@ -108,7 +113,7 @@ void Book::add(const MboMsg& rec) {
     ++duplicate_adds_;
     erase(b, rec.order_id);
   }
-  insert(b, rec.order_id, side, rec.price, rec.size);
+  insert(b, rec.order_id, side, rec.price, rec.size, ++stamps_);
 }
 
 void Book::cancel(const MboMsg& rec) {
@@ -133,13 +138,13 @@ void Book::modify(const MboMsg& rec) {
     // it joins at the tail. ToyBook reaches the same state by a no-op erase
     // followed by an insert, which keeps the two comparable.
     ++unknown_modifies_;
-    insert(b, rec.order_id, side, rec.price, rec.size);
+    insert(b, rec.order_id, side, rec.price, rec.size, ++stamps_);
     return;
   }
 
   if (!keeps_priority(it->second, rec)) {
     erase(b, rec.order_id);
-    insert(b, rec.order_id, side, rec.price, rec.size);
+    insert(b, rec.order_id, side, rec.price, rec.size, ++stamps_);
     return;
   }
 

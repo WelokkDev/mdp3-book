@@ -162,6 +162,8 @@ struct OrderView {
   std::int64_t effective_live_ns = 0;
   std::int64_t effective_cancel_ns = kNever;
   std::int64_t elected_ns = kNever;
+  /// The electing print's venue instant, where `elected_ns` is its capture.
+  std::int64_t elected_ts_event = kNever;
   std::int64_t trigger_price = 0;
   std::int64_t limit_price = 0;
 };
@@ -182,6 +184,11 @@ struct OrderView {
 
 [[nodiscard]] constexpr bool uses_limit(OrderType t) noexcept {
   return t == OrderType::kLimit || t == OrderType::kStopLimit;
+}
+
+/// A fill an order took resting, where the other side came to it.
+[[nodiscard]] constexpr bool is_passive(FillReason r) noexcept {
+  return r == FillReason::kLimitThrough || r == FillReason::kStopLimitThrough;
 }
 
 [[nodiscard]] constexpr bool is_terminal(OrderStatus s) noexcept {

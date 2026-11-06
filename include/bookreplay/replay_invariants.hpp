@@ -109,6 +109,12 @@ class ReplayHarness {
     /// Set alongside NoAggressorPolicy::kBothSides, which fills a resting order
     /// on a print that names no aggressor at all.
     bool allow_no_aggressor_passive_fills = false;
+    /// Set for an engine that judges an order's arrival and its cancel on the
+    /// venue's clock. A fill's `ts_event` is then what must fall inside the
+    /// order's live window, since its capture can trail a cancel that reached
+    /// the venue too late to stop it; and a resting order cannot fill in an
+    /// event at the very instant it arrived.
+    bool live_window_on_ts_event = false;
   };
 
   ReplayHarness(D& driver, Latency latency, Options opts = {})
@@ -182,12 +188,16 @@ class ReplayHarness {
       return;
     }
 
-    if (f.ts_ns < t->effective_live_ns || f.ts_ns >= t->effective_cancel_ns) {
+    const std::int64_t at = opts_.live_window_on_ts_event ? f.ts_event : f.ts_ns;
+    const bool before_live = opts_.live_window_on_ts_event && is_passive(f.reason)
+                                 ? at <= t->effective_live_ns
+                                 : at < t->effective_live_ns;
+    if (before_live || at >= t->effective_cancel_ns) {
       ++report_.causality_violations;
       add(ReplayInvariant::kCausality, "fill landed outside the order's live window", f);
     }
 
-    if (f.reason == FillReason::kLimitThrough || f.reason == FillReason::kStopLimitThrough) {
+    if (is_passive(f.reason)) {
       const bool allowed = opts_.allow_no_aggressor_passive_fills && f.aggressor == Side::kNone;
       if (f.aggressor != opposite(f.side) && !allowed) {
         ++report_.attribution_violations;

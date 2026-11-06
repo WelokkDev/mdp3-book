@@ -74,10 +74,10 @@ class FastBook {
   void reset();
 
   /// Throws BookError unless every level's total and count are those of its
-  /// queue, every queued order rests at that level and is reachable from its
-  /// id, every slot is either queued exactly once or free, every page's
-  /// occupancy agrees with its levels, and every side's touch is its best
-  /// non-empty level.
+  /// queue, every queue ascends by stamp, every queued order rests at that
+  /// level and is reachable from its id, every slot is either queued exactly
+  /// once or free, every page's occupancy agrees with its levels, and every
+  /// side's touch is its best non-empty level.
   void verify() const;
 
   [[nodiscard]] std::uint64_t mutation_count() const noexcept { return mutations_; }
@@ -90,6 +90,8 @@ class FastBook {
   [[nodiscard]] std::uint64_t unknown_modifies() const noexcept { return unknown_modifies_; }
 
   [[nodiscard]] std::uint64_t duplicate_adds() const noexcept { return duplicate_adds_; }
+
+  [[nodiscard]] std::uint64_t last_stamp() const noexcept { return stamps_; }
 
   [[nodiscard]] std::uint64_t queue_ahead(std::uint32_t instrument_id,
                                           std::uint64_t order_id) const;
@@ -137,6 +139,7 @@ class FastBook {
     std::uint64_t order_id = 0;
     std::int64_t price = 0;
     std::uint64_t filled = 0;
+    std::uint64_t stamp = 0;
     std::uint32_t size = 0;
     std::uint32_t prev = kNil;
     std::uint32_t next = kNil;  ///< the free list's link while free
@@ -299,6 +302,7 @@ class FastBook {
   std::uint64_t mutations_ = 0;
   std::uint64_t unknown_modifies_ = 0;
   std::uint64_t duplicate_adds_ = 0;
+  std::uint64_t stamps_ = 0;
   Growth growth_{};
 };
 

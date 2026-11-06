@@ -288,6 +288,7 @@ PYBIND11_MODULE(bookreplay, m) {
       .def_readonly("effective_live_ns", &OrderView::effective_live_ns)
       .def_readonly("effective_cancel_ns", &OrderView::effective_cancel_ns)
       .def_readonly("elected_ns", &OrderView::elected_ns)
+      .def_readonly("elected_ts_event", &OrderView::elected_ts_event)
       .def_readonly("trigger_price", &OrderView::trigger_price)
       .def_readonly("limit_price", &OrderView::limit_price);
 

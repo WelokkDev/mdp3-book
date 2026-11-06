@@ -61,6 +61,11 @@ class Book {
     /// since its instrument's last event boundary. Read by the next M to tell a
     /// partial fill's remainder from an iceberg refresh. Never part of `size`.
     std::uint64_t filled = 0;
+    /// Taken from a counter the book advances each time it queues an order, a
+    /// re-queue included, so a level's queue ascends by stamp. Something that is
+    /// not in the queue can then hold a place in it with one number: every order
+    /// stamped at or below it is ahead, and one that loses priority moves behind.
+    std::uint64_t stamp = 0;
   };
 
   /// The orders resting at one (side, price), oldest first. `size` is their
@@ -81,7 +86,8 @@ class Book {
 
   /// Throws BookError unless every level's total is the sum of its queue,
   /// every queued id rests at exactly that (side, price) and nowhere else,
-  /// every resting order is queued, and no level is empty.
+  /// every resting order is queued, no level is empty, and every queue ascends
+  /// by stamp.
   void verify() const;
 
   // The four BookLike requires; `invariants.hpp` will not compile without them.
@@ -110,6 +116,10 @@ class Book {
 
   /// A records whose order id was still resting; each replaced the old order.
   [[nodiscard]] std::uint64_t duplicate_adds() const noexcept { return duplicate_adds_; }
+
+  /// Every order resting now is stamped at or below this, and every order
+  /// queued from here on above it.
+  [[nodiscard]] std::uint64_t last_stamp() const noexcept { return stamps_; }
 
   /// The resting order, or nullptr if it is not resting here. The pointer is
   /// good until the next `apply()` or `reset()`, which may erase it.
@@ -165,7 +175,7 @@ class Book {
   [[nodiscard]] static Level* level_in(Instrument& b, Side side, std::int64_t price);
 
   static void insert(Instrument& b, std::uint64_t order_id, Side side, std::int64_t price,
-                     std::uint32_t size);
+                     std::uint32_t size, std::uint64_t stamp);
   static void erase(Instrument& b, std::uint64_t order_id);
 
   void add(const MboMsg& rec);
@@ -178,6 +188,7 @@ class Book {
   std::uint64_t mutations_ = 0;
   std::uint64_t unknown_modifies_ = 0;
   std::uint64_t duplicate_adds_ = 0;
+  std::uint64_t stamps_ = 0;
 };
 
 /// An order id of 0 is the venue's "no order" sentinel, and a side of 'N'

@@ -48,9 +48,13 @@ add_library(bookreplay
   src/definition.cpp
   src/depth.cpp
   src/fast_book.cpp
+  src/mbo_source.cpp
   src/mbp10_diff.cpp
   src/order.cpp
+  src/order_ledger.cpp
+  src/queue_positions.cpp
   src/replay.cpp
+  src/session_gate.cpp
   src/trade_source.cpp
 )
 add_library(bookreplay::bookreplay ALIAS bookreplay)

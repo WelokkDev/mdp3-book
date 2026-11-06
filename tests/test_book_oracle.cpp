@@ -510,6 +510,29 @@ TEST(BookOracle, RequeueingEveryModifyIsCaughtAtTheModify) {
   EXPECT_EQ(first.candidate, 3);
 }
 
+// Alone at its level, an order re-queued lands where it already stood, so no
+// quantity ahead of anything changes. Its stamp is all that says it gave its
+// place up to whatever arrives next.
+TEST(BookOracle, ARequeueThatMovesNothingStillShowsInTheStamp) {
+  StreamBuilder s = testing::opening_snapshot();
+  s.modify(101, Side::kBid, px(28999, 3), 6).last();
+  const std::vector<MboMsg> records = s.records();
+
+  RequeueingBook candidate;
+  const OracleReport report = run_oracle(records, candidate);
+
+  EXPECT_EQ(report.count(OracleDifferenceKind::kQueueAhead), 0U);
+  EXPECT_EQ(report.count(OracleDifferenceKind::kQueue), 0U);
+  ASSERT_FALSE(report.differences.empty());
+  const OracleDifference& first = report.differences.front();
+  EXPECT_EQ(first.kind, OracleDifferenceKind::kOrder);
+  EXPECT_STREQ(first.field, "stamp");
+  EXPECT_EQ(first.record_index, records.size() - 1);
+  EXPECT_EQ(first.order_id, 101U);
+  EXPECT_EQ(first.reference, 2);
+  EXPECT_EQ(first.candidate, 5);
+}
+
 TEST(BookOracle, TheFirstDifferenceCarriesTheRecordsBeforeIt) {
   StreamBuilder s = testing::opening_snapshot();
   for (std::uint64_t id = 300; id < 310; ++id) {
